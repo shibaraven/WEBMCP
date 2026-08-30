@@ -22,15 +22,15 @@ test("all tools have strict JSON Schema and correct read/write annotations", () 
   }
 });
 
-test("tool execution delegates arguments and respects cancellation", async () => {
-  const calls: Array<{ name: string; input: Record<string, unknown> }> = [];
-  const tools = createWebMcpTools((name, input) => {
-    calls.push({ name, input });
+test("tool execution delegates arguments with WebMCP provenance and respects cancellation", async () => {
+  const calls: Array<{ name: string; input: Record<string, unknown>; source: string }> = [];
+  const tools = createWebMcpTools((name, input, meta) => {
+    calls.push({ name, input, source: meta.source });
     return { status: "ok" };
   });
   const signal = new AbortController().signal;
   await tools[1].execute({ locationId: "INBOUND-01" }, { signal });
-  assert.deepEqual(calls, [{ name: "inspect_location", input: { locationId: "INBOUND-01" } }]);
+  assert.deepEqual(calls, [{ name: "inspect_location", input: { locationId: "INBOUND-01" }, source: "webmcp" }]);
 
   const controller = new AbortController();
   controller.abort();

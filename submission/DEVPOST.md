@@ -22,7 +22,7 @@ The public app runs a deterministic warehouse digital twin. One natural-language
 
 AGV-03 then moves along the visible route. At N07, the N07-N09 aisle becomes blocked. The AGV stops, M-001 becomes BLOCKED, and the Agent reads the changed state before replanning through N08 and N11. The mission resumes and P-104 is delivered to RACK-A12.
 
-Every WebMCP call, result, timestamp, and measured latency is visible. The planner exposes real per-stage timings for pallet, destination, AGV, route, battery, safety, and selection. A live Human vs Agent benchmark compares the same intent-to-proposal boundary: seven Manual UI interactions versus one Agent intent plus one human approval, with tool calls counted separately.
+Every WebMCP-origin call, input, result, run ID, timestamp, and measured latency is visible; manual fallback controls cannot manufacture Agent evidence. The planner exposes real per-stage timings for pallet, destination, AGV, route, battery, safety, and selection. A live Human vs Agent benchmark compares the same intent-to-proposal boundary: seven Manual UI interactions versus one Agent intent plus one human approval, with WebMCP compute and wall-clock time reported separately.
 
 ## Why WebMCP is a strong fit
 
@@ -38,13 +38,13 @@ The app is React and TypeScript on a public HTTPS deployment. A shared determini
 
 ## Challenges
 
-The central challenge was preserving a trustworthy boundary between language-model intent and physical execution. Planning must never start a mission; proposal creation must never imply approval; a blockage must stop the AGV before replanning; and every displayed metric must come from runtime instrumentation rather than a scripted animation.
+The central challenge was preserving a trustworthy boundary between language-model intent and physical execution. Planning must never start a mission; proposal creation must never imply approval; a blockage must stop the AGV before replanning; and every displayed metric must come from runtime instrumentation rather than a scripted animation. Each proposal is therefore bound to a world revision, deterministic plan fingerprint, five-minute validity window, and a human-visible recovery envelope limited to the same destination, at most 10 m extra distance, and at least 20% battery.
 
 ## Accomplishments
 
 - Seven meaningful WebMCP tools with visible production discovery and trace.
 - Approval cannot be bypassed by UI or Agent.
-- Deterministic blockage recovery without teleporting or hidden reset.
+- Deterministic 49.4 m blockage recovery with truthful 77% battery projection, without teleporting or hidden reset.
 - Real planner stage latency and fair Manual vs Agent benchmark boundaries.
 - Complete reset of mission, proposal, trace, metrics, timers, fault state, vehicles, pallet, and routes.
 - Public HTTPS app with no account, key, database, broker, or hardware requirement.

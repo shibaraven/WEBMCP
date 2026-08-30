@@ -9,7 +9,11 @@ export const WEBMCP_TOOL_NAMES = [
 ] as const;
 
 export type WebMcpToolName = (typeof WEBMCP_TOOL_NAMES)[number];
-export type WebMcpCommandExecutor = (name: WebMcpToolName, input: Record<string, unknown>) => unknown | Promise<unknown>;
+export type WebMcpCommandExecutor = (
+  name: WebMcpToolName,
+  input: Record<string, unknown>,
+  meta: { source: "webmcp" | "manual" | "system" },
+) => unknown | Promise<unknown>;
 
 const emptySchema = { type: "object", properties: {}, additionalProperties: false } as const;
 const readOnly = { readOnlyHint: true, untrustedContentHint: false } as const;
@@ -18,7 +22,7 @@ const mutating = { readOnlyHint: false, untrustedContentHint: false } as const;
 export function createWebMcpTools(executeCommand: WebMcpCommandExecutor): WebMcpTool[] {
   const execute = (name: WebMcpToolName) => async (input: Record<string, unknown>, options: { signal: AbortSignal }) => {
     if (options.signal.aborted) throw new DOMException("Tool execution cancelled", "AbortError");
-    return executeCommand(name, input);
+    return executeCommand(name, input, { source: "webmcp" });
   };
 
   return [
@@ -93,7 +97,7 @@ export function createWebMcpTools(executeCommand: WebMcpCommandExecutor): WebMcp
     {
       name: "replan_mission",
       title: "Replan blocked mission",
-      description: "Replace a blocked mission route with the shortest safe available route. Only blocked missions can be replanned.",
+      description: "Replace a blocked mission route with the shortest safe route only when it remains inside the human-approved destination, extra-distance and battery envelope.",
       inputSchema: {
         type: "object",
         properties: { missionId: { type: "string", description: "Blocked mission identifier to replan." } },

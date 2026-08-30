@@ -1,6 +1,6 @@
 import { findShortestPath } from "./dijkstra";
 import { HERO_BLOCKED_EDGE } from "./heroSeed";
-import { planTransport } from "./planner";
+import { createPlanFingerprint, planTransport } from "./planner";
 import { validateMissionStart } from "./safety";
 import type {
   AgvId,
@@ -58,6 +58,7 @@ export function runTransportPlan(
 export function createTransportProposal(
   state: HeroScenarioState,
   input: PlanTransportInput,
+  nowEpochMs = Date.now(),
 ): EngineTransition<
   | { status: "approval_required"; proposal: TransportProposal }
   | { status: "rejected"; reason: string }
@@ -72,6 +73,16 @@ export function createTransportProposal(
     id: "TP-001",
     status: "waiting",
     ...planning.plan,
+    plannedWorldRevision: state.worldRevision,
+    planFingerprint: createPlanFingerprint(planning.plan, state.worldRevision),
+    createdAtMs: nowEpochMs,
+    expiresAtMs: nowEpochMs + 5 * 60 * 1000,
+    recoveryPolicy: {
+      sameDestinationOnly: true,
+      maxAdditionalDistanceMeters: 10,
+      minBatteryPercent: state.safetyReservePercent,
+      autoResume: true,
+    },
   };
   return {
     state: {
@@ -87,6 +98,7 @@ export function createTransportProposal(
 
 export function approveTransportProposal(
   state: HeroScenarioState,
+  nowEpochMs = Date.now(),
 ): EngineTransition<{ status: "approved" | "rejected"; reason?: string; missionId?: string }> {
   if (!state.proposal || state.proposal.status !== "waiting") {
     return { state, result: { status: "rejected", reason: "No proposal is waiting for human approval." } };
@@ -95,7 +107,23 @@ export function approveTransportProposal(
     return { state, result: { status: "rejected", reason: "Unsafe proposal cannot be approved." } };
   }
 
+  if (state.proposal.expiresAtMs < nowEpochMs) {
+    return { state, result: { status: "rejected", reason: "Proposal expired; create a fresh plan before approval." } };
+  }
+  if (state.proposal.plannedWorldRevision !== state.worldRevision) {
+    return { state, result: { status: "rejected", reason: "Warehouse state changed after planning; create a fresh proposal." } };
+  }
+  const refreshed = planTransport(state, {
+    palletId: state.proposal.palletId,
+    destinationId: state.proposal.destinationId,
+    agvId: state.proposal.recommendedAgvId,
+  });
+  if (refreshed.status !== "plan_available" || createPlanFingerprint(refreshed.plan, state.worldRevision) !== state.proposal.planFingerprint) {
+    return { state, result: { status: "rejected", reason: "Proposal no longer matches the current safe plan." } };
+  }
+
   const proposal = { ...state.proposal, status: "approved" as const };
+  const approvedWorldRevision = state.worldRevision + 1;
   const mission: Mission = {
     id: "M-001",
     palletId: proposal.palletId,
@@ -108,12 +136,23 @@ export function approveTransportProposal(
     status: "approved",
     progressPercent: 0,
     distanceMeters: proposal.distanceMeters,
+    originalDistanceMeters: proposal.distanceMeters,
+    travelledDistanceMeters: 0,
+    remainingDistanceMeters: proposal.distanceMeters,
+    actualDistanceMeters: 0,
+    projectedTotalDistanceMeters: proposal.distanceMeters,
+    projectedBatteryAfter: proposal.estimatedBatteryAfter,
+    approvedWorldRevision,
+    replanCount: 0,
+    recoveryAuthorized: false,
+    recoveryCompleted: false,
   };
   return {
     state: {
       ...state,
       proposal,
       mission,
+      worldRevision: approvedWorldRevision,
       pallet: { ...state.pallet, status: "reserved" },
       fleet: updateAgv(state, mission.agvId, { status: "waiting", currentTaskId: mission.id }),
       decisionPipeline: { ...state.decisionPipeline, APPROVE: "complete", EXECUTE: "active" },
@@ -152,6 +191,7 @@ export function startApprovedMission(
     state: {
       ...state,
       mission,
+      worldRevision: state.worldRevision + 1,
       pallet: { ...state.pallet, status: "in_transit", nodeId: mission.sourceId },
       fleet: updateAgv(state, mission.agvId, { status: "moving", nodeId: mission.sourceId }),
       decisionPipeline: { ...state.decisionPipeline, EXECUTE: "active" },
@@ -179,9 +219,20 @@ export function advanceMission(state: HeroScenarioState): EngineTransition<{ sta
   const nextIndex = mission.routeIndex + 1;
   const distanceDelta = edgeDistance(state, currentNode, nextNode);
   const progressPercent = Math.round((nextIndex / (mission.route.length - 1)) * 100);
+  const travelledDistanceMeters = Number((mission.travelledDistanceMeters + distanceDelta).toFixed(1));
+  const remainingDistanceMeters = Number(Math.max(0, mission.remainingDistanceMeters - distanceDelta).toFixed(1));
+  const physicalProgressPercent = Math.min(100, Math.round((travelledDistanceMeters / mission.projectedTotalDistanceMeters) * 100));
   const movedState: HeroScenarioState = {
     ...state,
-    mission: { ...mission, routeIndex: nextIndex, progressPercent },
+    worldRevision: state.worldRevision + 1,
+    mission: {
+      ...mission,
+      routeIndex: nextIndex,
+      progressPercent: Number.isFinite(physicalProgressPercent) ? physicalProgressPercent : progressPercent,
+      travelledDistanceMeters,
+      actualDistanceMeters: travelledDistanceMeters,
+      remainingDistanceMeters,
+    },
     pallet: { ...state.pallet, nodeId: nextNode },
     fleet: updateAgv(state, mission.agvId, { nodeId: nextNode }),
     telemetry: {
@@ -231,21 +282,48 @@ export function beginMissionReplan(
   const mission = attemptedState.mission;
   if (!mission || mission.id !== missionId) return { state: attemptedState, result: { status: "rejected", reason: `Mission ${missionId} does not exist.` } };
   if (mission.status !== "blocked") return { state: attemptedState, result: { status: "rejected", reason: `Mission ${missionId} is not blocked.` } };
+  if (!attemptedState.proposal || attemptedState.proposal.status !== "approved") return { state: attemptedState, result: { status: "rejected", reason: "Recovery has no approved proposal envelope." } };
+  if (attemptedState.proposal.destinationId !== mission.destinationId) return { state: attemptedState, result: { status: "rejected", reason: "Recovery may not change the approved destination." } };
+  const assignedAgv = attemptedState.fleet.find((agv) => agv.id === mission.agvId);
+  if (assignedAgv?.currentTaskId !== mission.id || assignedAgv.status !== "blocked") return { state: attemptedState, result: { status: "rejected", reason: "Mission no longer owns the blocked AGV resource." } };
+  if (attemptedState.pallet.status !== "in_transit" || attemptedState.pallet.id !== mission.palletId) return { state: attemptedState, result: { status: "rejected", reason: "Mission no longer owns the in-transit pallet." } };
+  if (!attemptedState.nodes.some((node) => node.id === mission.destinationId)) return { state: attemptedState, result: { status: "rejected", reason: "Approved destination no longer exists." } };
 
   const currentNode = mission.route[mission.routeIndex];
   const previousRoute = mission.route.slice(mission.routeIndex);
   const route = findShortestPath(attemptedState.nodes, attemptedState.edges, currentNode, mission.destinationId);
   if (!route.found) return { state: attemptedState, result: { status: "rejected", reason: "No safe recovery route exists." } };
 
-  const previousDistance = previousRoute.slice(0, -1).reduce((total, node, index) => total + edgeDistance(attemptedState, node, previousRoute[index + 1]), 0);
-  const additionalDistanceMeters = Number((route.distanceMeters - previousDistance).toFixed(1));
+  const projectedTotalDistanceMeters = Number((mission.travelledDistanceMeters + route.distanceMeters).toFixed(1));
+  const additionalDistanceMeters = Number((projectedTotalDistanceMeters - mission.originalDistanceMeters).toFixed(1));
+  const selectedAgv = attemptedState.fleet.find((agv) => agv.id === mission.agvId);
+  const projectedBatteryAfter = (selectedAgv?.batteryPercent ?? 0) - Math.ceil(projectedTotalDistanceMeters / 6);
+  if (additionalDistanceMeters > (attemptedState.proposal?.recoveryPolicy.maxAdditionalDistanceMeters ?? 0)) {
+    return { state: attemptedState, result: { status: "rejected", reason: `Recovery adds ${additionalDistanceMeters.toFixed(1)} m, outside the approved recovery envelope.` } };
+  }
+  if (projectedBatteryAfter < (attemptedState.proposal?.recoveryPolicy.minBatteryPercent ?? attemptedState.safetyReservePercent)) {
+    return { state: attemptedState, result: { status: "rejected", reason: `Recovery would leave ${projectedBatteryAfter}% battery, below the approved reserve.` } };
+  }
   return {
     state: {
       ...attemptedState,
-      mission: { ...mission, status: "replanning", previousRoute, route: route.path, routeIndex: 0, progressPercent: 0, distanceMeters: route.distanceMeters },
+      worldRevision: attemptedState.worldRevision + 1,
+      mission: {
+        ...mission,
+        status: "replanning",
+        previousRoute,
+        route: route.path,
+        routeIndex: 0,
+        progressPercent: Math.round((mission.travelledDistanceMeters / projectedTotalDistanceMeters) * 100),
+        distanceMeters: projectedTotalDistanceMeters,
+        remainingDistanceMeters: route.distanceMeters,
+        projectedTotalDistanceMeters,
+        projectedBatteryAfter,
+        replanCount: mission.replanCount + 1,
+        recoveryAuthorized: true,
+      },
       fleet: updateAgv(attemptedState, mission.agvId, { status: "waiting" }),
       decisionPipeline: { ...attemptedState.decisionPipeline, RECOVER: "active" },
-      metrics: { ...attemptedState.metrics, successfulReplans: attemptedState.metrics.successfulReplans + 1 },
       telemetry: { ...attemptedState.telemetry, replans: attemptedState.telemetry.replans + 1, trace: [...attemptedState.telemetry.trace, "REPLAN N07-N08-N11-RACK-A12"] },
     },
     result: { status: "route_updated", previousRoute, newRoute: route.path, additionalDistanceMeters },
@@ -253,13 +331,14 @@ export function beginMissionReplan(
 }
 
 export function resumeReplannedMission(state: HeroScenarioState): EngineTransition<{ status: "running" | "ignored" }> {
-  if (!state.mission || state.mission.status !== "replanning") return { state, result: { status: "ignored" } };
+  if (!state.mission || state.mission.status !== "replanning" || !state.mission.recoveryAuthorized) return { state, result: { status: "ignored" } };
   return {
     state: {
       ...state,
+      worldRevision: state.worldRevision + 1,
       mission: { ...state.mission, status: "running" },
       fleet: updateAgv(state, state.mission.agvId, { status: "moving" }),
-      decisionPipeline: { ...state.decisionPipeline, EXECUTE: "active", RECOVER: "complete" },
+      decisionPipeline: { ...state.decisionPipeline, EXECUTE: "active", RECOVER: "active" },
     },
     result: { status: "running" },
   };
@@ -267,15 +346,17 @@ export function resumeReplannedMission(state: HeroScenarioState): EngineTransiti
 
 function completeMission(state: HeroScenarioState): EngineTransition<{ status: "completed"; nodeId: NodeId }> {
   const mission = state.mission!;
-  const battery = state.proposal?.estimatedBatteryAfter ?? state.fleet.find((agv) => agv.id === mission.agvId)?.batteryPercent;
+  const battery = mission.projectedBatteryAfter;
+  const recovered = mission.replanCount > 0 && !mission.recoveryCompleted;
   return {
     state: {
       ...state,
-      mission: { ...mission, status: "completed", routeIndex: mission.route.length - 1, progressPercent: 100 },
+      worldRevision: state.worldRevision + 1,
+      mission: { ...mission, status: "completed", routeIndex: mission.route.length - 1, progressPercent: 100, remainingDistanceMeters: 0, actualDistanceMeters: mission.travelledDistanceMeters, recoveryCompleted: recovered || mission.recoveryCompleted },
       pallet: { ...state.pallet, status: "stored", nodeId: mission.destinationId },
       fleet: updateAgv(state, mission.agvId, { status: "idle", nodeId: mission.destinationId, batteryPercent: battery, currentTaskId: null }),
       decisionPipeline: { ...state.decisionPipeline, EXECUTE: "complete", RECOVER: state.blockageInjected ? "complete" : state.decisionPipeline.RECOVER },
-      metrics: { ...state.metrics, completedMissions: state.metrics.completedMissions + 1 },
+      metrics: { ...state.metrics, completedMissions: state.metrics.completedMissions + 1, successfulReplans: state.metrics.successfulReplans + (recovered ? 1 : 0) },
       telemetry: { ...state.telemetry, trace: [...state.telemetry.trace, "MISSION_COMPLETED M-001"] },
     },
     result: { status: "completed", nodeId: mission.destinationId },
@@ -310,21 +391,33 @@ export function getMissionStatus(state: HeroScenarioState, missionId: string) {
     agvId: state.mission.agvId,
     currentNode: agv?.nodeId ?? null,
     progressPercent: state.mission.progressPercent,
+    originalDistanceMeters: state.mission.originalDistanceMeters,
+    travelledDistanceMeters: state.mission.travelledDistanceMeters,
+    remainingDistanceMeters: state.mission.remainingDistanceMeters,
+    projectedTotalDistanceMeters: state.mission.projectedTotalDistanceMeters,
+    projectedBatteryAfter: state.mission.projectedBatteryAfter,
+    recoveryAuthorized: state.mission.recoveryAuthorized,
     blockedEdge: state.mission.status === "blocked" ? `${HERO_BLOCKED_EDGE[0]}-${HERO_BLOCKED_EDGE[1]}` : null,
   };
 }
 
 export function getOperationMetrics(state: HeroScenarioState) {
-  const missionSuccessRate = state.metrics.transportAttempts === 0 ? 0 : state.metrics.completedMissions / state.metrics.transportAttempts;
-  const blockedRouteRecoveryRate = state.metrics.replanAttempts === 0 ? 0 : state.metrics.successfulReplans / state.metrics.replanAttempts;
-  const unsafeRequestRejectionRate = state.metrics.unsafeRequests === 0 ? 0 : state.metrics.unsafeRejections / state.metrics.unsafeRequests;
+  const missionSuccessRate = state.metrics.transportAttempts === 0 ? null : state.metrics.completedMissions / state.metrics.transportAttempts;
+  const blockedRouteRecoveryRate = state.metrics.replanAttempts === 0 ? null : state.metrics.successfulReplans / state.metrics.replanAttempts;
+  const unsafeRequestRejectionRate = state.metrics.unsafeRequests === 0 ? null : state.metrics.unsafeRejections / state.metrics.unsafeRequests;
   return {
     ...state.metrics,
     missionSuccessRate,
     blockedRouteRecoveryRate,
     unsafeRequestRejectionRate,
     averageToolLatencyMs: state.metrics.toolCalls === 0 ? 0 : state.metrics.totalToolLatencyMs / state.metrics.toolCalls,
-    routeLengthMeters: state.mission?.distanceMeters ?? state.proposal?.distanceMeters ?? 0,
+    routeLengthMeters: state.mission
+      ? (state.mission.status === "completed" ? state.mission.actualDistanceMeters : state.mission.projectedTotalDistanceMeters)
+      : state.proposal?.distanceMeters ?? 0,
+    originalRouteLengthMeters: state.mission?.originalDistanceMeters ?? state.proposal?.distanceMeters ?? 0,
+    actualDistanceMeters: state.mission?.actualDistanceMeters ?? 0,
+    remainingRouteLengthMeters: state.mission?.remainingDistanceMeters ?? state.proposal?.distanceMeters ?? 0,
+    projectedTotalDistanceMeters: state.mission?.projectedTotalDistanceMeters ?? state.proposal?.distanceMeters ?? 0,
     selectedAgv: state.mission?.agvId ?? state.proposal?.recommendedAgvId ?? null,
     planningTotalMs: state.planningTrace?.totalPlanningMs ?? 0,
     benchmark: state.benchmark,

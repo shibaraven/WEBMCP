@@ -10,19 +10,23 @@ import {
   resumeReplannedMission,
   runTransportPlan,
   startApprovedMission,
+  getOperationMetrics,
 } from "../../src/domain/missionEngine";
 import { resetHeroScenario } from "../../src/domain/heroScenario";
 import { validateTransportPlan } from "../../src/domain/safety";
 import { findShortestPath } from "../../src/domain/dijkstra";
 
 test("safe proposal selects AGV-03 and waits for human approval", () => {
-  const transition = createTransportProposal(createHeroState(), { palletId: "P-104", destinationId: "RACK-A12" });
+  const transition = createTransportProposal(createHeroState(), { palletId: "P-104", destinationId: "RACK-A12" }, 1_000);
   assert.equal(transition.result.status, "approval_required");
   assert.equal(transition.state.proposal?.recommendedAgvId, "AGV-03");
   assert.equal(transition.state.proposal?.status, "waiting");
   assert.deepEqual(transition.state.proposal?.plannedRoute, [...HERO_GOLDEN_ROUTE]);
   assert.equal(transition.state.proposal?.estimatedBatteryAfter, 79);
   assert.equal(transition.state.mission, null);
+  assert.equal(transition.state.proposal?.plannedWorldRevision, 0);
+  assert.equal(transition.state.proposal?.expiresAtMs, 301_000);
+  assert.match(transition.state.proposal?.planFingerprint ?? "", /AGV-03/);
 });
 
 test("mission cannot start before approval", () => {
@@ -43,6 +47,32 @@ test("human approval creates an approved mission and start transitions to runnin
   assert.equal(running.result.status, "running");
   assert.equal(running.state.mission?.status, "running");
   assert.equal(running.state.pallet.status, "in_transit");
+});
+
+test("approval rejects expired or stale proposals before reserving physical resources", () => {
+  const proposed = createTransportProposal(createHeroState(), { palletId: "P-104", destinationId: "RACK-A12" }, 1_000).state;
+  const expired = approveTransportProposal(proposed, 301_001);
+  assert.equal(expired.result.status, "rejected");
+  assert.match(expired.result.reason ?? "", /expired/i);
+  assert.equal(expired.state.pallet.status, "waiting");
+
+  const staleState = { ...proposed, worldRevision: proposed.worldRevision + 1 };
+  const stale = approveTransportProposal(staleState, 2_000);
+  assert.equal(stale.result.status, "rejected");
+  assert.match(stale.result.reason ?? "", /changed/i);
+  assert.equal(stale.state.mission, null);
+});
+
+test("mission start revalidates route and resource ownership after approval", () => {
+  const proposed = createTransportProposal(createHeroState(), { palletId: "P-104", destinationId: "RACK-A12" }).state;
+  const approved = approveTransportProposal(proposed).state;
+  const changed = {
+    ...approved,
+    edges: approved.edges.map((edge) => edge.id === "E-07-09" ? { ...edge, blocked: true } : edge),
+  };
+  const start = startApprovedMission(changed);
+  assert.equal(start.result.status, "rejected");
+  assert.equal(start.state.lastSafetyResult?.checks.find((check) => check.id === "START-07")?.passed, false);
 });
 
 test("human rejection never creates a mission", () => {
@@ -99,6 +129,22 @@ test("blocked mission replans through N08 and N11 with 7.8m extra distance", () 
     assert.equal(replanned.result.additionalDistanceMeters, 7.8);
   }
   assert.equal(replanned.state.mission?.status, "replanning");
+  assert.equal(replanned.state.metrics.successfulReplans, 0);
+  assert.equal(replanned.state.mission?.projectedTotalDistanceMeters, 49.4);
+  assert.equal(replanned.state.mission?.projectedBatteryAfter, 77);
+});
+
+test("bounded recovery policy rejects an alternate route outside the approved envelope", () => {
+  let state = createTransportProposal(createHeroState(), { palletId: "P-104", destinationId: "RACK-A12" }).state;
+  state = startApprovedMission(approveTransportProposal(state).state).state;
+  state = advanceMission(advanceMission(state).state).state;
+  state = {
+    ...state,
+    proposal: state.proposal ? { ...state.proposal, recoveryPolicy: { ...state.proposal.recoveryPolicy, maxAdditionalDistanceMeters: 5 } } : null,
+  };
+  const replanned = beginMissionReplan(state, "M-001");
+  assert.equal(replanned.result.status, "rejected");
+  if (replanned.result.status === "rejected") assert.match(replanned.result.reason, /outside the approved recovery envelope/);
 });
 
 test("full approved mission recovers and delivers P-104 to RACK-A12", () => {
@@ -109,6 +155,7 @@ test("full approved mission recovers and delivers P-104 to RACK-A12", () => {
   state = beginMissionReplan(state, "M-001").state;
   assert.deepEqual(state.mission?.route, HERO_ALTERNATE_ROUTE.slice(2));
   state = resumeReplannedMission(state).state;
+  assert.equal(state.metrics.successfulReplans, 0);
   state = advanceMission(state).state;
   state = advanceMission(state).state;
   state = advanceMission(state).state;
@@ -119,6 +166,14 @@ test("full approved mission recovers and delivers P-104 to RACK-A12", () => {
   assert.equal(state.metrics.completedMissions, 1);
   assert.equal(state.metrics.successfulReplans, 1);
   assert.equal(state.metrics.replanAttempts, 1);
+  assert.equal(state.mission?.actualDistanceMeters, 49.4);
+  assert.equal(state.mission?.originalDistanceMeters, 41.6);
+  assert.equal(state.mission?.remainingDistanceMeters, 0);
+  assert.equal(state.fleet.find((agv) => agv.id === "AGV-03")?.batteryPercent, 77);
+  const metrics = getOperationMetrics(state);
+  assert.equal(metrics.routeLengthMeters, 49.4);
+  assert.equal(metrics.originalRouteLengthMeters, 41.6);
+  assert.equal(metrics.blockedRouteRecoveryRate, 1);
 });
 
 test("replanning is rejected unless the mission is blocked", () => {
@@ -131,7 +186,7 @@ test("complete reset clears proposal, mission, blockage, metrics and traces", ()
   let state = createTransportProposal(createHeroState(), { palletId: "P-104", destinationId: "RACK-A12" }).state;
   state = startApprovedMission(approveTransportProposal(state).state).state;
   state = advanceMission(advanceMission(state).state).state;
-  state.webMcpTrace.push({ id: 1, toolName: "test", status: "success", summary: "test", latencyMs: 1, timestamp: "now" });
+  state.webMcpTrace.push({ id: 1, toolName: "test", status: "success", summary: "test", latencyMs: 1, timestamp: "now", source: "webmcp", runId: state.runId, inputSummary: "{}", missionStatus: "blocked" });
   const reset = resetHeroScenario();
   assert.deepEqual(reset, createHeroState());
   assert.equal(reset.mission, null);

@@ -34,9 +34,11 @@ function createEdges(): WarehouseEdge[] {
   ];
 }
 
-export function createHeroState(): HeroScenarioState {
+export function createHeroState(runId = "HERO-001-R0"): HeroScenarioState {
   return {
     scenarioId: "HERO-001",
+    runId,
+    worldRevision: 0,
     seedVersion: "hero-001-v1",
     safetyReservePercent: 20,
     preferredAgvId: "AGV-03",
@@ -86,6 +88,8 @@ export function createHeroState(): HeroScenarioState {
         startedAtMs: null,
         proposalReadyAtMs: null,
         elapsedMs: null,
+        toolComputeMs: 0,
+        sequenceVerified: false,
       },
     },
     blockageInjected: false,

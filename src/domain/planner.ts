@@ -89,7 +89,7 @@ export function planTransport(
   }));
 
   const trace: PlanningTrace = {
-    requestId: `PLAN-${state.scenarioId}`,
+    requestId: `${state.runId}-PLAN-${state.metrics.toolCalls + state.metrics.transportAttempts + 1}`,
     startedAt,
     totalPlanningMs: roundMs(clock() - startedAt),
     stages,
@@ -111,7 +111,21 @@ export function planTransport(
     batteryBefore: selectedAgv.batteryPercent,
     estimatedBatteryAfter: batteryAfter,
     safety,
-    explanation: `${selectedAgv.id} is the shortest safe available vehicle and remains above the ${state.safetyReservePercent}% reserve.`,
+    explanation: `${selectedAgv.id} is the preferred available HERO unit under the deterministic policy ranking and remains above the ${state.safetyReservePercent}% reserve.`,
   };
   return { status: "plan_available", plan, trace };
+}
+
+export function createPlanFingerprint(plan: TransportPlan, worldRevision: number): string {
+  return [
+    worldRevision,
+    plan.palletId,
+    plan.sourceId,
+    plan.destinationId,
+    plan.recommendedAgvId,
+    plan.plannedRoute.join(">"),
+    plan.distanceMeters.toFixed(3),
+    plan.estimatedBatteryAfter,
+    plan.safety.status,
+  ].join("|");
 }

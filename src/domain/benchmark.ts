@@ -77,7 +77,7 @@ export function advanceManualBenchmark(state: HeroScenarioState, timestampMs: nu
 }
 
 export function prepareAgentBenchmark(state: HeroScenarioState): HeroScenarioState {
-  const fresh = createHeroState();
+  const fresh = createHeroState(`HERO-001-AGENT-${Date.now()}`);
   return {
     ...fresh,
     benchmark: {

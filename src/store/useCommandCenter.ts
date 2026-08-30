@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createHeroState } from "../domain/heroSeed";
 import { advanceManualBenchmark, prepareAgentBenchmark } from "../domain/benchmark";
+import { isOrderedSubsequence } from "../domain/e2e";
 import {
   advanceMission,
   approveTransportProposal,
@@ -58,12 +59,14 @@ export function useCommandCenter() {
     setState(next);
   }, []);
 
-  const executeCommand = useCallback<WebMcpCommandExecutor>((name, input) => {
+  const executeCommand = useCallback<WebMcpCommandExecutor>((name, input, meta) => {
     const started = nowMs();
     const current = stateRef.current;
+    const isWebMcp = meta.source === "webmcp";
     const previousAgent = current.benchmark.agent;
+    const benchmarkOpen = isWebMcp && previousAgent.status !== "completed";
     const agentStartedAt = previousAgent.startedAtMs ?? started;
-    const working: HeroScenarioState = {
+    const working: HeroScenarioState = benchmarkOpen ? {
       ...current,
       benchmark: {
         ...current.benchmark,
@@ -75,7 +78,7 @@ export function useCommandCenter() {
           startedAtMs: agentStartedAt,
         },
       },
-    };
+    } : current;
     let next = working;
     let output: unknown;
 
@@ -119,7 +122,13 @@ export function useCommandCenter() {
         });
         next = transition.state;
         output = transition.result.status === "approval_required"
-          ? { status: "approval_required", proposalId: transition.result.proposal.id, message: "Human approval is required before execution." }
+          ? {
+              status: "approval_required",
+              proposalId: transition.result.proposal.id,
+              message: "Human approval is required before execution.",
+              expiresAt: new Date(transition.result.proposal.expiresAtMs).toISOString(),
+              recoveryPolicy: transition.result.proposal.recoveryPolicy,
+            }
           : transition.result;
         break;
       }
@@ -136,12 +145,14 @@ export function useCommandCenter() {
               previousRoute: transition.result.previousRoute,
               newRoute: transition.result.newRoute,
               additionalDistanceM: transition.result.additionalDistanceMeters,
+              projectedTotalDistanceM: transition.state.mission?.projectedTotalDistanceMeters,
+              projectedBatteryAfter: transition.state.mission?.projectedBatteryAfter,
             }
           : transition.result;
         break;
       }
       case "get_operation_metrics": {
-        output = { ...getOperationMetrics(working), toolCalls: working.metrics.toolCalls + 1 };
+        output = { ...getOperationMetrics(working), toolCalls: working.metrics.toolCalls + (isWebMcp ? 1 : 0) };
         break;
       }
     }
@@ -149,7 +160,14 @@ export function useCommandCenter() {
     const finished = nowMs();
     const latencyMs = Number(Math.max(0, finished - started).toFixed(3));
     const outputStatus = (output as Record<string, unknown>)?.status;
-    const proposalReady = name === "propose_transport" && outputStatus === "approval_required";
+    const chronologicalNames = [...working.webMcpTrace].reverse().map((item) => item.toolName).concat(name);
+    const proposalSequenceVerified = isOrderedSubsequence(chronologicalNames, [
+      "get_operational_snapshot",
+      "inspect_location",
+      "plan_transport",
+      "propose_transport",
+    ]);
+    const proposalReady = benchmarkOpen && name === "propose_transport" && outputStatus === "approval_required" && proposalSequenceVerified;
     const entry: WebMcpTraceEntry = {
       id: current.metrics.toolCalls + 1,
       toolName: name,
@@ -157,31 +175,39 @@ export function useCommandCenter() {
       summary: summarize(name, output),
       latencyMs,
       timestamp: new Date().toISOString(),
+      source: meta.source,
+      runId: current.runId,
+      inputSummary: JSON.stringify(input).slice(0, 180),
+      missionStatus: next.mission?.status ?? "none",
     };
-    next = {
-      ...next,
-      webMcpTrace: [entry, ...next.webMcpTrace].slice(0, 30),
-      metrics: {
-        ...next.metrics,
-        toolCalls: current.metrics.toolCalls + 1,
-        totalToolLatencyMs: Number((current.metrics.totalToolLatencyMs + latencyMs).toFixed(3)),
-      },
-      benchmark: {
-        ...next.benchmark,
-        mode: "agent",
-        agent: {
-          ...next.benchmark.agent,
-          status: proposalReady ? "completed" : next.benchmark.agent.status,
-          toolCalls: previousAgent.toolCalls + 1,
-          humanIntents: previousAgent.humanIntents || 1,
-          startedAtMs: agentStartedAt,
-          proposalReadyAtMs: proposalReady ? finished : next.benchmark.agent.proposalReadyAtMs,
-          elapsedMs: proposalReady ? Number(Math.max(0, finished - agentStartedAt).toFixed(3)) : next.benchmark.agent.elapsedMs,
+    if (isWebMcp) {
+      next = {
+        ...next,
+        webMcpTrace: [entry, ...next.webMcpTrace].slice(0, 50),
+        metrics: {
+          ...next.metrics,
+          toolCalls: current.metrics.toolCalls + 1,
+          totalToolLatencyMs: Number((current.metrics.totalToolLatencyMs + latencyMs).toFixed(3)),
         },
-      },
-    };
+        benchmark: {
+          ...next.benchmark,
+          mode: "agent",
+          agent: {
+            ...next.benchmark.agent,
+            status: proposalReady ? "completed" : next.benchmark.agent.status,
+            toolCalls: previousAgent.toolCalls + (benchmarkOpen ? 1 : 0),
+            humanIntents: previousAgent.humanIntents || 1,
+            startedAtMs: agentStartedAt,
+            proposalReadyAtMs: proposalReady ? finished : next.benchmark.agent.proposalReadyAtMs,
+            elapsedMs: proposalReady ? Number(Math.max(0, finished - agentStartedAt).toFixed(3)) : next.benchmark.agent.elapsedMs,
+            toolComputeMs: Number((previousAgent.toolComputeMs + (benchmarkOpen ? latencyMs : 0)).toFixed(3)),
+            sequenceVerified: proposalReady || next.benchmark.agent.sequenceVerified,
+          },
+        },
+      };
+    }
     commit(next);
-    setOperatorNotice(entry.status === "success" ? `${name} completed.` : entry.summary);
+    setOperatorNotice(entry.status === "success" ? `${meta.source === "webmcp" ? "WebMCP" : "Manual fallback"}: ${name} completed.` : entry.summary);
     return output;
   }, [commit]);
 
@@ -192,7 +218,7 @@ export function useCommandCenter() {
       palletId: input.palletId,
       destinationId: input.destinationId,
       ...(input.agvId ? { agvId: input.agvId } : {}),
-    });
+    }, { source: "manual" });
   }, [executeCommand]);
 
   const approve = useCallback(() => {
@@ -224,7 +250,7 @@ export function useCommandCenter() {
   }, [commit]);
 
   const replan = useCallback(() => {
-    const result = executeCommand("replan_mission", { missionId: "M-001" });
+    const result = executeCommand("replan_mission", { missionId: "M-001" }, { source: "manual" });
     const current = stateRef.current;
     if (current.mission?.status === "replanning") {
       commit({ ...current, telemetry: { ...current.telemetry, pendingTimerCount: 1 } });
@@ -240,14 +266,14 @@ export function useCommandCenter() {
       palletId: input.palletId,
       destinationId: input.destinationId,
       ...(input.agvId ? { agvId: input.agvId } : {}),
-    });
+    }, { source: "manual" });
   }, [executeCommand]);
 
   const reset = useCallback(() => {
     timerGenerationRef.current += 1;
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = null;
-    const fresh = createHeroState();
+    const fresh = createHeroState(`HERO-001-R${Date.now()}`);
     commit(fresh);
     setResetCount((count) => count + 1);
     setOperatorNotice("HERO-001 reset: mission, proposal, trace, metrics, timers and fault state cleared.");

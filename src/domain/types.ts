@@ -14,6 +14,7 @@ export type AgvStatus = "idle" | "moving" | "waiting" | "blocked" | "charging" |
 export type MissionStatus = "approved" | "running" | "blocked" | "replanning" | "completed" | "failed";
 export type DecisionStage = "OBSERVE" | "PLAN" | "VALIDATE" | "APPROVE" | "EXECUTE" | "RECOVER";
 export type StageStatus = "idle" | "active" | "complete" | "warning";
+export type InvocationSource = "webmcp" | "manual" | "system";
 
 export interface WarehouseNode {
   id: NodeId;
@@ -100,6 +101,16 @@ export interface TransportPlan {
 export interface TransportProposal extends TransportPlan {
   id: "TP-001";
   status: "waiting" | "approved" | "rejected";
+  plannedWorldRevision: number;
+  planFingerprint: string;
+  createdAtMs: number;
+  expiresAtMs: number;
+  recoveryPolicy: {
+    sameDestinationOnly: true;
+    maxAdditionalDistanceMeters: number;
+    minBatteryPercent: number;
+    autoResume: true;
+  };
 }
 
 export interface Mission {
@@ -113,7 +124,18 @@ export interface Mission {
   routeIndex: number;
   status: MissionStatus;
   progressPercent: number;
+  /** Current projected total. Kept for compact UI compatibility. */
   distanceMeters: number;
+  originalDistanceMeters: number;
+  travelledDistanceMeters: number;
+  remainingDistanceMeters: number;
+  actualDistanceMeters: number;
+  projectedTotalDistanceMeters: number;
+  projectedBatteryAfter: number;
+  approvedWorldRevision: number;
+  replanCount: number;
+  recoveryAuthorized: boolean;
+  recoveryCompleted: boolean;
 }
 
 export interface WebMcpTraceEntry {
@@ -123,6 +145,10 @@ export interface WebMcpTraceEntry {
   summary: string;
   latencyMs: number;
   timestamp: string;
+  source: InvocationSource;
+  runId: string;
+  inputSummary: string;
+  missionStatus: MissionStatus | "none";
 }
 
 export interface OperationMetrics {
@@ -158,6 +184,8 @@ export interface AgentBenchmark {
   startedAtMs: number | null;
   proposalReadyAtMs: number | null;
   elapsedMs: number | null;
+  toolComputeMs: number;
+  sequenceVerified: boolean;
 }
 
 export interface BenchmarkState {
@@ -168,6 +196,8 @@ export interface BenchmarkState {
 
 export interface HeroScenarioState {
   scenarioId: "HERO-001";
+  runId: string;
+  worldRevision: number;
   seedVersion: "hero-001-v1";
   safetyReservePercent: 20;
   preferredAgvId: "AGV-03";

@@ -22,7 +22,7 @@ test("agent benchmark preparation resets operations but preserves the measured m
     state = advanceManualBenchmark(state, 100 + index * 25);
   });
   state.edges.find((edge) => edge.id === "E-07-09")!.blocked = true;
-  state.webMcpTrace.push({ id: 1, toolName: "test", status: "success", summary: "test", latencyMs: 1, timestamp: "now" });
+  state.webMcpTrace.push({ id: 1, toolName: "test", status: "success", summary: "test", latencyMs: 1, timestamp: "now", source: "webmcp", runId: state.runId, inputSummary: "{}", missionStatus: "none" });
 
   const armed = prepareAgentBenchmark(state);
   assert.equal(armed.benchmark.mode, "agent");

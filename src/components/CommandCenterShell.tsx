@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { MANUAL_BENCHMARK_STEPS } from "../domain/benchmark";
+import { evaluateHeroE2E } from "../domain/e2e";
 import { calculateHeroRoute } from "../domain/heroScenario";
 import { getOperationMetrics } from "../domain/missionEngine";
 import type { DecisionStage, HeroScenarioState, NodeId, WarehouseEdge, WarehouseNode } from "../domain/types";
@@ -139,10 +140,14 @@ function ApprovalPanel({
       <p>{proposal.sourceId} <b>-&gt;</b> {proposal.destinationId}</p>
       <dl>
         <div><dt>AGV</dt><dd>{proposal.recommendedAgvId}</dd></div>
-        <div><dt>Distance</dt><dd>{proposal.distanceMeters.toFixed(1)} m</dd></div>
-        <div><dt>ETA</dt><dd>{proposal.estimatedSeconds} sec</dd></div>
-        <div><dt>Battery</dt><dd>{proposal.batteryBefore}% -&gt; {proposal.estimatedBatteryAfter}%</dd></div>
+        <div><dt>{mission?.replanCount ? "Projected total" : "Distance"}</dt><dd>{(mission?.projectedTotalDistanceMeters ?? proposal.distanceMeters).toFixed(1)} m</dd></div>
+        <div><dt>Physical ETA</dt><dd>{proposal.estimatedSeconds} sec / demo 8x</dd></div>
+        <div><dt>Battery</dt><dd>{proposal.batteryBefore}% -&gt; {mission?.projectedBatteryAfter ?? proposal.estimatedBatteryAfter}%</dd></div>
       </dl>
+      <p className="proposal-explanation">{proposal.explanation}</p>
+      <div className="recovery-envelope">
+        APPROVED RECOVERY: same destination / +≤{proposal.recoveryPolicy.maxAdditionalDistanceMeters} m / battery ≥{proposal.recoveryPolicy.minBatteryPercent}% / auto-resume
+      </div>
       {mission && <div className="mission-progress"><i style={{ width: `${mission.progressPercent}%` }} /><span>{mission.progressPercent}%</span></div>}
       {proposal.status === "waiting" && (
         <div className="approval-actions">
@@ -151,7 +156,10 @@ function ApprovalPanel({
         </div>
       )}
       {mission?.status === "blocked" && (
-        <button className="button button--warning button--wide" onClick={onReplan}>Replan blocked mission</button>
+        <div className="agent-recovery">
+          <strong>AWAITING AGENT: call replan_mission</strong>
+          <details><summary>Manual fallback (not counted as WebMCP)</summary><button className="button button--warning button--wide" onClick={onReplan}>Run manual replan fallback</button></details>
+        </div>
       )}
       {proposal.status === "rejected" && (
         <button className="button button--wide" onClick={onPropose}>Create new proposal</button>
@@ -162,7 +170,10 @@ function ApprovalPanel({
 }
 
 function formatDuration(value: number | null) {
-  return value === null ? "NOT MEASURED" : `${value.toFixed(3)} ms`;
+  if (value === null) return "NOT MEASURED";
+  if (value === 0) return "< timer resolution";
+  if (value < 0.1) return `${Math.max(1, Math.round(value * 1000))} µs`;
+  return `${value.toFixed(3)} ms`;
 }
 
 function BenchmarkPanel({
@@ -178,10 +189,11 @@ function BenchmarkPanel({
   const agent = state.benchmark.agent;
   const nextStep = MANUAL_BENCHMARK_STEPS[manual.stepIndex];
   const agentHumanInputs = agent.humanIntents + agent.humanApprovals;
-  const reduction = manual.humanInteractions > 0 && agentHumanInputs > 0
+  const validComparison = manual.status === "completed" && agent.status === "completed" && agent.sequenceVerified;
+  const reduction = validComparison && agentHumanInputs > 0
     ? ((manual.humanInteractions - agentHumanInputs) / manual.humanInteractions) * 100
     : null;
-  const speedup = manual.elapsedMs && agent.elapsedMs ? manual.elapsedMs / agent.elapsedMs : null;
+  const speedup = validComparison && manual.elapsedMs && agent.elapsedMs ? manual.elapsedMs / agent.elapsedMs : null;
 
   return (
     <article className="panel benchmark-panel">
@@ -210,8 +222,8 @@ function BenchmarkPanel({
         <div className="benchmark-mode benchmark-mode--agent">
           <small>WEBMCP AGENT</small>
           <strong>{agent.humanIntents} intent + {agent.humanApprovals} approval</strong>
-          <span>{formatDuration(agent.elapsedMs)}</span>
-          <p>{agent.toolCalls} tool calls, counted separately from human input.</p>
+          <span>Wall clock: {formatDuration(agent.elapsedMs)}</span>
+          <p>{agent.toolCalls} verified WebMCP calls / {formatDuration(agent.toolComputeMs)} tool compute. Approval is recorded outside the intent→proposal timer.</p>
           <div className={`benchmark-state benchmark-state--${agent.status}`}>{agent.status.toUpperCase()}</div>
         </div>
         <div className="benchmark-mode benchmark-mode--comparison">
@@ -227,7 +239,7 @@ function BenchmarkPanel({
 
 function MetricsPanel({ state }: { state: HeroScenarioState }) {
   const metrics = getOperationMetrics(state);
-  const percent = (value: number) => `${(value * 100).toFixed(0)}%`;
+  const percent = (value: number | null) => value === null ? "N/A" : `${(value * 100).toFixed(0)}%`;
   return (
     <article className="panel metrics-panel">
       <div className="panel-heading">
@@ -235,31 +247,31 @@ function MetricsPanel({ state }: { state: HeroScenarioState }) {
         <span className="score">RUNTIME ONLY</span>
       </div>
       <div className="metric-grid">
-        <div><small>TOOL CALLS</small><strong>{metrics.toolCalls}</strong><span>{metrics.averageToolLatencyMs.toFixed(3)} ms avg</span></div>
+        <div><small>TOOL CALLS</small><strong>{metrics.toolCalls}</strong><span>{metrics.toolCalls === 0 ? "N/A latency" : `${formatDuration(metrics.averageToolLatencyMs)} avg`}</span></div>
         <div><small>HUMAN APPROVALS</small><strong>{metrics.operatorApprovals}</strong><span>{metrics.operatorRejections} rejected</span></div>
         <div><small>MISSION SUCCESS</small><strong>{percent(metrics.missionSuccessRate)}</strong><span>{metrics.completedMissions}/{metrics.transportAttempts} completed</span></div>
         <div><small>REPLAN SUCCESS</small><strong>{percent(metrics.blockedRouteRecoveryRate)}</strong><span>{metrics.successfulReplans}/{metrics.replanAttempts} recovered</span></div>
         <div><small>UNSAFE REJECTION</small><strong>{percent(metrics.unsafeRequestRejectionRate)}</strong><span>{metrics.unsafeRejections}/{metrics.unsafeRequests} blocked</span></div>
-        <div><small>ROUTE / AGV</small><strong>{metrics.routeLengthMeters.toFixed(1)} m</strong><span>{metrics.selectedAgv ?? "not selected"}</span></div>
+        <div><small>ROUTE / AGV</small><strong>{metrics.routeLengthMeters.toFixed(1)} m</strong><span>original {metrics.originalRouteLengthMeters.toFixed(1)} / remaining {metrics.remainingRouteLengthMeters.toFixed(1)} / {metrics.selectedAgv ?? "not selected"}</span></div>
       </div>
     </article>
   );
 }
 
 function LiveE2EPanel({ state, discoveredCount }: { state: HeroScenarioState; discoveredCount: number }) {
-  const invoked = new Set(state.webMcpTrace.map((entry) => entry.toolName));
-  const invokedCount = WEBMCP_TOOL_NAMES.filter((name) => invoked.has(name)).length;
-  const completed = discoveredCount === 7 && invokedCount === 7 && state.mission?.status === "completed";
+  const proof = evaluateHeroE2E(state, discoveredCount);
   return (
     <article className="panel live-e2e-panel">
       <div className="panel-heading">
         <div><span className="panel-index">08</span><h2>Live Agent E2E proof</h2></div>
-        <span className={`score ${completed ? "safe" : ""}`}>{completed ? "VERIFIED" : "AWAITING AGENT"}</span>
+        <span className={`score ${proof.verified ? "safe" : ""}`}>{proof.verified ? "VERIFIED" : "AWAITING AGENT"}</span>
       </div>
       <div className="e2e-proof">
-        <div><small>PRODUCTION DISCOVERY</small><strong>{discoveredCount}/7 tools</strong></div>
-        <div><small>ACTUAL TOOL COVERAGE</small><strong>{invokedCount}/7 invoked</strong></div>
+        <div><small>PRODUCTION DISCOVERY</small><strong>{proof.discoveredCount}/7 registered</strong></div>
+        <div><small>WEBMCP COVERAGE</small><strong>{proof.invokedCount}/7 invoked</strong></div>
+        <div><small>ORDERED HERO FLOW</small><strong>{proof.orderedSequence ? "PASS" : "PENDING"}</strong></div>
         <div><small>HERO OUTCOME</small><strong>{state.mission?.status.toUpperCase() ?? "NOT RUN"}</strong></div>
+        <div><small>METRICS AFTER COMPLETE</small><strong>{proof.metricsAfterCompletion ? "PASS" : "PENDING"}</strong></div>
       </div>
       <details>
         <summary>Copy the complete Hero Prompt</summary>
@@ -297,6 +309,7 @@ export function CommandCenterShell() {
         </a>
         <div className="topbar-status">
           <span className={`webmcp-badge webmcp-badge--${webMcp.status}`}><i className="status-dot" /> WEBMCP {webMcp.status.toUpperCase()}</span>
+          <span>DETERMINISTIC SIMULATOR / DEMO 8X</span>
           <span>HERO-001 / PUBLIC HTTPS</span>
         </div>
       </header>
@@ -304,7 +317,7 @@ export function CommandCenterShell() {
       <section className="hero hero--compact" id="top">
         <div>
           <div className="eyebrow"><span>AGENT-NATIVE CONTROL LAYER</span> HUMAN-SUPERVISED PHYSICAL AI</div>
-          <h1>Safe intent.<br /><em>Visible execution.</em></h1>
+          <h1>Safe intent. <em>Visible execution.</em></h1>
           <p>One WebMCP workflow observes the warehouse, validates a safe plan, requests human approval, stops at a blocked aisle, replans and delivers P-104.</p>
           <div className="hero-actions">
             <button className="button button--primary" onClick={() => propose()} disabled={Boolean(state.mission && state.mission.status !== "completed") || state.proposal?.status === "waiting"}>Create proposal</button>
@@ -331,7 +344,7 @@ export function CommandCenterShell() {
             <span className="live-label"><i className="status-dot" /> {state.mission?.status.toUpperCase() ?? "LIVE DOMAIN"}</span>
           </div>
           <WarehouseMap state={state} />
-          <div className="map-legend"><span><i className="legend-line legend-line--active" /> Planned route</span><span><i className="legend-line legend-line--traversed" /> Traversed</span><span><i className="legend-line legend-line--blocked" /> Blocked</span></div>
+          <div className="map-legend"><span><i className="legend-line legend-line--active" /> Planned route</span><span><i className="legend-line legend-line--traversed" /> Traversed</span><span><i className="legend-line legend-line--blocked" /> Blocked</span><span>Physical ETA 48s / demo speed 8x</span></div>
           <div className="fleet-strip">
             {state.fleet.map((agv) => (
               <div className={`fleet-unit${agv.id === "AGV-03" ? " fleet-unit--hero" : ""}`} key={agv.id}>
@@ -353,15 +366,15 @@ export function CommandCenterShell() {
               <div><span className="panel-index">03</span><h2>WebMCP trace</h2></div>
               <span className={`score score--${webMcp.status}`}>{webMcp.discoveredCount}/7</span>
             </div>
-            <div className="trace-status"><strong>{webMcp.message}</strong><small>Real tool results and measured execution latency only.</small></div>
+            <div className="trace-status"><strong>{webMcp.message}</strong><small>WebMCP-origin calls only / run {state.runId} / real latency.</small></div>
             <div className="trace-list">
               {state.webMcpTrace.length === 0 ? (
                 <div className="trace-empty">Waiting for a compatible browser agent to call a tool.</div>
-              ) : state.webMcpTrace.slice(0, 6).map((entry) => (
+              ) : state.webMcpTrace.slice(0, 10).map((entry) => (
                 <div className="trace-row" key={entry.id}>
                   <span className={`trace-mark trace-mark--${entry.status}`} />
-                  <div><strong>{entry.toolName}</strong><small>{entry.summary}</small></div>
-                  <time>{entry.latencyMs.toFixed(3)} ms</time>
+                  <div title={`${entry.inputSummary} → ${entry.summary}`}><strong>{entry.toolName}</strong><small>IN {entry.inputSummary || "{}"}</small><small>OUT {entry.summary}</small><small>{entry.source.toUpperCase()} / {new Date(entry.timestamp).toLocaleTimeString()} / {entry.runId}</small></div>
+                  <time>{formatDuration(entry.latencyMs)}</time>
                 </div>
               ))}
             </div>
@@ -372,10 +385,10 @@ export function CommandCenterShell() {
 
       <section className="evidence-grid">
         <article className="panel planning-panel">
-          <div className="panel-heading"><div><span className="panel-index">04</span><h2>Measured planning pipeline</h2></div><span className="score">{state.planningTrace ? `${state.planningTrace.totalPlanningMs.toFixed(3)} ms` : "NO TRACE"}</span></div>
+          <div className="panel-heading"><div><span className="panel-index">04</span><h2>Measured planning pipeline</h2></div><span className="score">{state.planningTrace ? formatDuration(state.planningTrace.totalPlanningMs) : "NO TRACE"}</span></div>
           <div className="planning-stages">
             {state.planningTrace ? state.planningTrace.stages.map((stage) => (
-              <div className="planning-row" key={stage.id}><span>{stage.label}</span><small>{stage.evidence}</small><strong>{stage.durationMs.toFixed(3)} ms</strong></div>
+              <div className="planning-row" key={stage.id}><span>{stage.label}</span><small>{stage.evidence}</small><strong>{formatDuration(stage.durationMs)}</strong></div>
             )) : <div className="planning-empty">Run plan_transport or create a proposal to generate real stage timing.</div>}
           </div>
         </article>

@@ -13,8 +13,8 @@ Warehouse software was designed for humans clicking through screens. Physical AI
 - Measures every real planner stage with `performance.now()`; there is no fake AI loading delay.
 - Requires explicit human approval before mission execution.
 - Moves `AGV-03` and pallet `P-104` through the live warehouse map.
-- Blocks `N07-N09`, stops the vehicle, replans through `N08 -> N11`, and completes delivery.
-- Publishes seven structured WebMCP tools and shows every invocation, result, timestamp, and measured latency on screen.
+- Blocks `N07-N09`, stops the vehicle, replans through `N08 -> N11`, and completes the 49.4 m actual journey with 77% projected battery remaining.
+- Publishes seven structured WebMCP tools and shows every WebMCP-origin invocation, input, result, run ID, timestamp, and measured latency on screen.
 - Compares a seven-interaction Manual UI workflow against one Agent intent plus one human approval using identical benchmark boundaries and business logic.
 
 ## Why WebMCP
@@ -56,7 +56,7 @@ The architecture is deliberately not `LLM -> Robot`. The Agent proposes, determi
 | `plan_transport` | `readOnlyHint: true` | Measure planner stages and return a safe plan without starting a mission |
 | `propose_transport` | `readOnlyHint: false` | Create `TP-001`; human approval remains mandatory |
 | `get_mission_status` | `readOnlyHint: true` | Observe running, blocked, replanning, or completed state |
-| `replan_mission` | `readOnlyHint: false` | Replace a blocked route with the shortest safe alternative |
+| `replan_mission` | `readOnlyHint: false` | Replace a blocked route only inside the human-approved recovery envelope |
 | `get_operation_metrics` | `readOnlyHint: true` | Read runtime KPIs and Human vs Agent evidence |
 
 Every tool uses a strict object schema with `additionalProperties: false`. Five tools are read-only; only proposal creation and mission replanning mutate state. All tools are same-origin and respect `AbortSignal` cancellation.
@@ -77,7 +77,7 @@ Dijkstra        AGV Simulator
 Visible Digital Twin / Approval / Trace
 ```
 
-Manual controls and WebMCP tools call the same planner, safety policy, mission engine, and HERO-001 seed.
+Manual controls and WebMCP tools call the same planner, safety policy, mission engine, and HERO-001 seed. Invocation provenance remains separate: manual controls never create WebMCP trace evidence, increment WebMCP tool-call metrics, or satisfy Live E2E verification.
 
 ## Observable Planning
 
@@ -98,8 +98,13 @@ The deterministic policy rejects:
 - missing routes or routes containing blocked edges;
 - competing active missions;
 - every attempt to start before human approval.
+- expired proposals, changed world revisions, or a plan fingerprint that no longer matches current state;
+- starts where the route, destination, battery, AGV reservation, or pallet reservation changed after approval;
+- recovery that changes destination, adds more than 10 m, drops below the 20% reserve, or no longer owns the assigned resources.
 
-At `N07`, the active edge becomes blocked before replanning. The AGV stops and the mission enters `BLOCKED`; it never teleports or silently repairs itself.
+Every proposal is bound to a world revision, deterministic plan fingerprint, and five-minute approval window. Approval recomputes the exact plan before reserving resources. It grants a bounded recovery envelope for the same destination, at most 10 m additional travel, and at least 20% projected battery; it does not grant arbitrary replanning authority.
+
+At `N07`, the active edge becomes blocked before replanning. The AGV stops and the mission enters `BLOCKED`; it never teleports or silently repairs itself. Replan success is recorded only after the recovered mission reaches its destination.
 
 ## Running Locally
 
@@ -151,7 +156,11 @@ The live benchmark uses the same start and stop events for both modes:
 | Manual UI | First task-specific selection | `TP-001` created and rendered | Seven measured clicks/selections | N/A |
 | WebMCP Agent | First WebMCP call for the intent | `propose_transport` returns and `TP-001` renders | One intent; approval counted separately | Measured separately |
 
-The page calculates elapsed time, interaction reduction, speedup, mission success rate, recovery rate, unsafe rejection rate, average tool latency, selected AGV, route length, and per-stage planning latency from the current run. No submission metric is hard-coded or fabricated.
+The Agent wall-clock benchmark starts on the first WebMCP call and stops only when the required observe -> inspect -> plan -> propose sequence produces `TP-001`. Tool compute time is shown separately and freezes at the same boundary. UI clicks cannot start or complete this benchmark. The page calculates interaction reduction and speedup only after that WebMCP sequence is verified.
+
+Mission metrics distinguish the original 41.6 m route, current remaining distance, projected total distance, and final 49.4 m actual distance. Empty rate denominators display `N/A`; sub-resolution planner timings are labeled honestly instead of rendered as fabricated `0.000 ms` work.
+
+Live E2E reports **VERIFIED** only when production discovery is 7/7, all seven current-run WebMCP tools occur in Hero order, `M-001` completes, and `get_operation_metrics` is called after completion.
 
 ## Work Created During WebMCP Challenge
 
