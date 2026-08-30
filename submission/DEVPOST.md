@@ -65,6 +65,7 @@ The same interface can sit above a production fleet-management system. Approved 
 - Live app: https://physical-ai-webmcp-hero001.mingjen.chatgpt.site
 - Public repository: https://github.com/shibaraven/WEBMCP
 - Video: https://github.com/shibaraven/WEBMCP/blob/main/submission/physical-ai-webmcp-demo.mp4
+- Latest v9 E2E proof: https://github.com/shibaraven/WEBMCP/blob/main/submission/E2E_V9_VERIFICATION.md
 
 The 2:37 master contains English narration and hard-burned English subtitles. Its
 closing evidence is from the August 30 Chrome 149+ compatible-Agent run: production

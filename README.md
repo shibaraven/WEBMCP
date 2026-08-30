@@ -143,6 +143,10 @@ Hero outcome `COMPLETED`, metrics-after-complete `PASS`, and Live Agent E2E
 `VERIFIED`. The run used one human approval, recovered once from the N07 blockage,
 finished on the 49.4 m alternate route, and left AGV-03 at 77% battery.
 
+The production v9 deployment was re-verified after the `SAFE-11` and `SAFE-12`
+update at commit `4c9e451`. The ordered tool results and a fresh live screenshot are
+preserved in [the v9 verification record](submission/E2E_V9_VERIFICATION.md).
+
 The [2:37 verified demo video](submission/physical-ai-webmcp-demo.mp4) uses English
 narration and hard-burned English subtitles. Its final evidence frames come from
 that production Agent run.
