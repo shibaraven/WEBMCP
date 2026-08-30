@@ -12,5 +12,5 @@
     "tests/**/*.mjs",
     "next-env.d.ts"
   ],
-  "exclude": ["node_modules", "dist", ".vinext", "db", "worker", "examples"]
+  "exclude": ["node_modules", "dist", ".vinext", "worker"]
 }

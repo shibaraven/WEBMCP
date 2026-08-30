@@ -27,6 +27,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
 
 # env files (can opt-in for committing if needed)
 .env*
@@ -43,3 +44,4 @@ yarn-error.log*
 # generated narration / video QA intermediates
 /submission/*.wav
 /submission/video-frames/qa-*.png
+/submission/video-frames/verified/

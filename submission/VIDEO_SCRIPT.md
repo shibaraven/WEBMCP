@@ -1,4 +1,4 @@
-# Verified Demo Video Script - 2:38
+# Verified Demo Video Script - 2:37 Final
 
 The final cut uses the real Chrome 149+ compatible-Agent run. The closing evidence
 shows production discovery 7/7, actual tool coverage 7/7, ordered Hero flow PASS,
