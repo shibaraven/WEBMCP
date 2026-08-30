@@ -20,8 +20,8 @@ const readOnly = { readOnlyHint: true, untrustedContentHint: false } as const;
 const mutating = { readOnlyHint: false, untrustedContentHint: false } as const;
 
 export function createWebMcpTools(executeCommand: WebMcpCommandExecutor): WebMcpTool[] {
-  const execute = (name: WebMcpToolName) => async (input: Record<string, unknown>, options: { signal: AbortSignal }) => {
-    if (options.signal.aborted) throw new DOMException("Tool execution cancelled", "AbortError");
+  const execute = (name: WebMcpToolName) => async (input: Record<string, unknown>, options?: { signal?: AbortSignal }) => {
+    if (options?.signal?.aborted) throw new DOMException("Tool execution cancelled", "AbortError");
     return executeCommand(name, input, { source: "webmcp" });
   };
 

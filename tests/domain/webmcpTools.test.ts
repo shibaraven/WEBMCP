@@ -36,3 +36,16 @@ test("tool execution delegates arguments with WebMCP provenance and respects can
   controller.abort();
   await assert.rejects(async () => { await tools[0].execute({}, { signal: controller.signal }); }, /cancelled/);
 });
+
+test("tool execution accepts compatible agents that omit execution options", async () => {
+  const calls: Array<{ name: string; input: Record<string, unknown>; source: string }> = [];
+  const tools = createWebMcpTools((name, input, meta) => {
+    calls.push({ name, input, source: meta.source });
+    return { status: "ok" };
+  });
+
+  const result = await tools[0].execute({});
+
+  assert.deepEqual(result, { status: "ok" });
+  assert.deepEqual(calls, [{ name: "get_operational_snapshot", input: {}, source: "webmcp" }]);
+});

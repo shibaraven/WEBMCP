@@ -12,7 +12,7 @@ interface WebMcpRegisteredTool {
 }
 
 interface WebMcpTool extends WebMcpRegisteredTool {
-  execute: (input: Record<string, unknown>, options: { signal: AbortSignal }) => unknown | Promise<unknown>;
+  execute: (input: Record<string, unknown>, options?: { signal?: AbortSignal }) => unknown | Promise<unknown>;
 }
 
 interface WebMcpModelContext {
