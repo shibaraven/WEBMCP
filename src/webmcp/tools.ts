@@ -52,6 +52,7 @@ export function createWebMcpTools(executeCommand: WebMcpCommandExecutor): WebMcp
         properties: {
           palletId: { type: "string", description: "Pallet identifier to transport." },
           destinationId: { type: "string", description: "Destination warehouse location identifier." },
+          agvId: { type: "string", description: "Optional AGV identifier to validate. Omit to use deterministic selection." },
         },
         required: ["palletId", "destinationId"],
         additionalProperties: false,

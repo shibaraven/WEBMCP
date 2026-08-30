@@ -76,6 +76,7 @@ export function useCommandCenter() {
         const transition = runTransportPlan(current, {
           palletId: String(input.palletId ?? ""),
           destinationId: String(input.destinationId ?? ""),
+          agvId: typeof input.agvId === "string" ? input.agvId : undefined,
         });
         next = transition.state;
         output = transition.result.status === "plan_available"
@@ -149,11 +150,12 @@ export function useCommandCenter() {
   const webMcp = useWebMcpTools(executeCommand);
 
   const propose = useCallback((input: PlanTransportInput = { palletId: "P-104", destinationId: "RACK-A12" }) => {
-    const transition = createTransportProposal(stateRef.current, input);
-    commit(transition.state);
-    setOperatorNotice(transition.result.status === "approval_required" ? "TP-001 is waiting for human approval." : transition.result.reason);
-    return transition.result;
-  }, [commit]);
+    return executeCommand("propose_transport", {
+      palletId: input.palletId,
+      destinationId: input.destinationId,
+      ...(input.agvId ? { agvId: input.agvId } : {}),
+    });
+  }, [executeCommand]);
 
   const approve = useCallback(() => {
     const transition = approveTransportProposal(stateRef.current);
@@ -168,19 +170,19 @@ export function useCommandCenter() {
   }, [commit]);
 
   const replan = useCallback(() => {
-    const transition = beginMissionReplan(stateRef.current, "M-001");
-    commit(transition.state);
-    setOperatorNotice(transition.result.status === "route_updated" ? "Safe alternate route found. AGV will resume." : transition.result.reason);
-  }, [commit]);
+    return executeCommand("replan_mission", { missionId: "M-001" });
+  }, [executeCommand]);
 
   const safetyProbe = useCallback((kind: "destination" | "battery") => {
     const input: PlanTransportInput = kind === "destination"
       ? { palletId: "P-104", destinationId: "RACK-Z99" }
       : { palletId: "P-104", destinationId: "RACK-A12", agvId: "AGV-04" };
-    const transition = runTransportPlan(stateRef.current, input);
-    commit(transition.state);
-    setOperatorNotice(transition.result.status === "rejected" ? transition.result.reason : "Safety probe unexpectedly passed.");
-  }, [commit]);
+    return executeCommand("plan_transport", {
+      palletId: input.palletId,
+      destinationId: input.destinationId,
+      ...(input.agvId ? { agvId: input.agvId } : {}),
+    });
+  }, [executeCommand]);
 
   const reset = useCallback(() => {
     const fresh = createHeroState();
