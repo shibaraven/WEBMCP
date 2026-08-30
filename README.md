@@ -1,92 +1,175 @@
 # Physical AI WebMCP Command Center
 
-A safe agent-native control layer for autonomous warehouses. The competition build exposes structured WebMCP tools that let a browser agent inspect warehouse state, create a deterministic transport proposal, wait for human approval, recover from a blocked aisle, and deliver pallet P-104.
+**An Agent-Native Control Layer for Autonomous Warehouses**
+
+[Live HTTPS application](https://physical-ai-webmcp-hero001.mingjen.chatgpt.site) · [Public source](https://github.com/shibaraven/WEBMCP)
+
+Warehouse software was designed for humans clicking through screens. Physical AI WebMCP Command Center lets an AI browser agent understand warehouse state, propose a safe transport, collaborate with a human operator, react to a blocked aisle, and complete the mission through structured WebMCP tools.
 
 ## What It Does
 
 - Runs the deterministic `HERO-001` warehouse digital twin entirely in the browser.
-- Selects `AGV-03`, plans a 41.6 m route, estimates battery and validates safety.
+- Selects `AGV-03` and plans the 41.6 m route from `INBOUND-01` to `RACK-A12`.
+- Measures every real planner stage with `performance.now()`; there is no fake AI loading delay.
 - Requires explicit human approval before mission execution.
-- Moves AGV-03 and P-104 through the warehouse map.
-- Injects the `N07-N09` aisle blockage when AGV-03 reaches N07.
-- Stops the vehicle before calculating the 7.8 m longer recovery route.
-- Resumes and completes delivery at `RACK-A12`.
-- Records real tool-call and planner-stage latency.
+- Moves `AGV-03` and pallet `P-104` through the live warehouse map.
+- Blocks `N07-N09`, stops the vehicle, replans through `N08 -> N11`, and completes delivery.
+- Publishes seven structured WebMCP tools and shows every invocation, result, timestamp, and measured latency on screen.
+- Compares a seven-interaction Manual UI workflow against one Agent intent plus one human approval using identical benchmark boundaries and business logic.
 
 ## Why WebMCP
 
-Without WebMCP an agent must interpret and click a visual dashboard. With WebMCP the page publishes structured operational capabilities with JSON Schema, explicit read/write annotations, deterministic validation and visible effects in the same application state.
+Without WebMCP, an agent must interpret a dashboard and guess which controls represent warehouse operations. With WebMCP, the page publishes typed operational capabilities with JSON Schema, read/write annotations, deterministic validation, and visible effects in the same application state.
+
+Removing WebMCP removes the structured Agent interaction model; the product is not a click-automation demo.
 
 ## Hero Scenario
 
-1. Inspect the warehouse and P-104.
-2. Plan transport from `INBOUND-01` to `RACK-A12`.
-3. Create proposal `TP-001` using `AGV-03`.
-4. Human approves the safe proposal.
-5. Mission `M-001` starts and reaches N07.
-6. `N07-N09` becomes blocked and AGV-03 stops.
-7. Replan through `N08 -> N11 -> RACK-A12`.
-8. Resume and complete the mission.
+1. Discover all seven tools on the public HTTPS origin.
+2. Read the warehouse snapshot and inspect `INBOUND-01`.
+3. Plan transport for `P-104` to `RACK-A12`.
+4. Create proposal `TP-001` with `AGV-03`.
+5. Receive explicit human approval.
+6. Start mission `M-001` and move to `N07`.
+7. Detect the `N07-N09` blockage and stop.
+8. Inspect the blocked mission and replan through `N08 -> N11`.
+9. Resume and deliver `P-104` to `RACK-A12`.
+10. Read the final operation metrics.
+
+## What Humans and Agents Do Together
+
+| Participant | Responsibility |
+|---|---|
+| Human | Express one intent, review the proposal, and approve or reject the high-impact action |
+| Browser Agent | Observe state, inspect locations, plan, propose, monitor, replan, and summarize metrics through WebMCP |
+| Deterministic software | Enforce destination, occupancy, availability, battery, route, concurrency, and approval rules |
+| Physical AI simulator | Execute movement, expose the blockage, stop safely, resume, and complete the mission |
+
+The architecture is deliberately not `LLM -> Robot`. The Agent proposes, deterministic software validates, the human authorizes, and Physical AI executes.
 
 ## WebMCP Tools
 
-| Tool | Mode | Purpose |
+| Tool | Annotation | Hero use |
 |---|---|---|
-| `get_operational_snapshot` | Read | Read fleet, mission, pallet and blockage state |
-| `inspect_location` | Read | Inspect one warehouse location |
-| `plan_transport` | Read | Run planner, selection and safety without starting a mission |
-| `propose_transport` | Write | Create a proposal that requires human approval |
-| `get_mission_status` | Read | Read live mission progress and blocked state |
-| `replan_mission` | Write | Replace a blocked route with a safe alternative |
-| `get_operation_metrics` | Read | Read measured mission and WebMCP metrics |
+| `get_operational_snapshot` | `readOnlyHint: true` | Observe fleet, pallet, mission, and blockage state |
+| `inspect_location` | `readOnlyHint: true` | Inspect the source or another warehouse node |
+| `plan_transport` | `readOnlyHint: true` | Measure planner stages and return a safe plan without starting a mission |
+| `propose_transport` | `readOnlyHint: false` | Create `TP-001`; human approval remains mandatory |
+| `get_mission_status` | `readOnlyHint: true` | Observe running, blocked, replanning, or completed state |
+| `replan_mission` | `readOnlyHint: false` | Replace a blocked route with the shortest safe alternative |
+| `get_operation_metrics` | `readOnlyHint: true` | Read runtime KPIs and Human vs Agent evidence |
 
-All descriptions stay within the recommended character budgets. Read tools use `readOnlyHint: true`; outputs contain deterministic internal state and use `untrustedContentHint: false`.
+Every tool uses a strict object schema with `additionalProperties: false`. Five tools are read-only; only proposal creation and mission replanning mutate state. All tools are same-origin and respect `AbortSignal` cancellation.
+
+## Architecture
+
+```text
+Compatible Browser Agent
+          |
+       WebMCP
+          |
+Shared React Application State
+  |        |        |        |
+Planner  Safety  Mission  Metrics
+  |                 |
+Dijkstra        AGV Simulator
+          |
+Visible Digital Twin / Approval / Trace
+```
+
+Manual controls and WebMCP tools call the same planner, safety policy, mission engine, and HERO-001 seed.
+
+## Observable Planning
+
+The main screen exposes the real operational sequence:
+
+`OBSERVE -> PLAN -> VALIDATE -> APPROVE -> EXECUTE -> RECOVER`
+
+`plan_transport` records measured evidence for pallet inspection, destination validation, AGV evaluation, route calculation, battery reserve, safety constraints, and vehicle selection. Each stage and the total use real timestamps; UI transitions are never reported as planner compute time.
 
 ## Safety Model
 
-The agent proposes. Deterministic software validates. A human authorizes execution. The simulator executes.
+The deterministic policy rejects:
 
-The current policy rejects invalid destinations, missing or unavailable pallets, occupied destinations, unavailable AGVs, battery below the 20% reserve, missing or blocked routes, competing missions and every unapproved mission start.
+- unknown destinations or pallets;
+- non-transportable pallets and occupied destinations;
+- unavailable or already assigned AGVs;
+- battery below the 20% post-mission reserve;
+- missing routes or routes containing blocked edges;
+- competing active missions;
+- every attempt to start before human approval.
+
+At `N07`, the active edge becomes blocked before replanning. The AGV stops and the mission enters `BLOCKED`; it never teleports or silently repairs itself.
 
 ## Running Locally
+
+Requirements: Node.js 22.13 or newer.
 
 ```bash
 npm install
 npm run dev
 npm test
-npm run typecheck
 npm run lint
 ```
 
-Node.js 22.13 or newer is required. WebMCP discovery requires a compatible secure browser context; the production site uses HTTPS.
+WebMCP requires a secure compatible client. For the challenge, use the ChatGPT in-app browser or Chrome 149+ with `chrome://flags/#enable-webmcp-testing` enabled and restarted.
 
 ## Judge Test Instructions
 
-1. Open the public site in a WebMCP-compatible browser or extension.
-2. Confirm the header and trace panel report `7/7` tools.
-3. Ask: `Move pallet P-104 from INBOUND-01 to RACK-A12 safely. Inspect the warehouse first, choose the best available AGV, and ask me for approval before starting.`
-4. Approve `TP-001` in the page.
-5. When `M-001` stops at N07, ask the agent to inspect and replan it.
-6. Confirm P-104 arrives at RACK-A12.
-7. Use `RESET DEMO` before repeating the scenario.
+1. Open the [public site](https://physical-ai-webmcp-hero001.mingjen.chatgpt.site) in a compatible Agent browser.
+2. Press **RESET DEMO** and confirm Mission, Proposal, Trace, Metrics, Timer, and Fault all show zero/none.
+3. Confirm the page reports `7/7 tools` discovered.
+4. Send the Main Hero Prompt below and approve `TP-001` only after reviewing AGV, route, ETA, battery, and safety.
+5. When `M-001` stops at `N07`, let the Agent inspect status and invoke `replan_mission`.
+6. Confirm `P-104` reaches `RACK-A12`, all seven tool names appear in the trace, and the Live Agent E2E card reports **VERIFIED**.
+7. Reset, then run both safety prompts. Both must be rejected by code.
 
-## Suggested Safety Prompts
+## Suggested Prompts
 
-- `Move pallet P-104 to RACK-Z99.`
-- `Use AGV-04 even if its battery is too low.`
+**Main Hero Prompt**
 
-Both requests must be rejected by deterministic code, not model judgment.
+> Move pallet P-104 from INBOUND-01 to RACK-A12 safely. Inspect the warehouse and source first, plan the transport, create a proposal and ask for approval before starting. After approval, monitor M-001; when it becomes blocked, inspect its status and replan it. After completion, return operation metrics. Use all seven available warehouse tools during this workflow.
 
-## Architecture
+**Operational Summary**
 
-React UI -> shared application state -> planner and safety policy -> mission simulator -> WebMCP adapter. The manual controls and all seven tools call the same domain functions.
+> Give me a concise operational summary of this warehouse.
+
+**Invalid Destination**
+
+> Move pallet P-104 to RACK-Z99.
+
+**Low Battery**
+
+> Use AGV-04 even if its battery is too low.
+
+## Benchmark Results
+
+The live benchmark uses the same start and stop events for both modes:
+
+| Mode | Start | Stop | Human input | Tool calls |
+|---|---|---|---|---|
+| Manual UI | First task-specific selection | `TP-001` created and rendered | Seven measured clicks/selections | N/A |
+| WebMCP Agent | First WebMCP call for the intent | `propose_transport` returns and `TP-001` renders | One intent; approval counted separately | Measured separately |
+
+The page calculates elapsed time, interaction reduction, speedup, mission success rate, recovery rate, unsafe rejection rate, average tool latency, selected AGV, route length, and per-stage planning latency from the current run. No submission metric is hard-coded or fabricated.
+
+## Work Created During WebMCP Challenge
+
+This competition repository contains the challenge-period WebMCP extension work: the deterministic warehouse domain, Dijkstra planner, safety policy, approval-gated mission engine, AGV simulator, dynamic blockage and recovery, seven-tool WebMCP adapter, observable planning pipeline, runtime benchmark instrumentation, reset guarantees, tests, public deployment, and submission material.
+
+The commit history is intentionally incremental and dated within the August 25 - September 3, 2026 submission period so judges can distinguish this work from any pre-existing warehouse experiments.
 
 ## Known Limitations
 
 - The Physical AI layer is a deterministic browser simulator, not a real AGV driver.
-- WebMCP remains an experimental browser API and requires a compatible client.
-- No MQTT, VDA5050, WMS, database, authentication or external service is required.
+- WebMCP is an experimental browser API and requires the supported ChatGPT browser or an enabled Chrome build.
+- The competition build intentionally has no MQTT, VDA5050, WMS, database, authentication, or external runtime dependency.
+- Timer values depend on the browser and device running the benchmark; the UI always reports that run's actual values.
+
+## Future Physical AI Integration
+
+The same safe interface can sit above a fleet-management system and connect approved missions to VDA5050, MQTT, vendor APIs, PLCs, or AMR orchestration. The deterministic policy and human approval boundary remain between the Agent's intent and physical execution.
 
 ## License
 
-MIT
+[MIT](LICENSE)

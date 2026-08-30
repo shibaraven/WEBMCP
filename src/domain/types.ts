@@ -127,11 +127,43 @@ export interface WebMcpTraceEntry {
 
 export interface OperationMetrics {
   toolCalls: number;
+  totalToolLatencyMs: number;
   completedMissions: number;
   successfulReplans: number;
+  replanAttempts: number;
   operatorApprovals: number;
+  operatorRejections: number;
+  unsafeRequests: number;
   unsafeRejections: number;
   transportAttempts: number;
+}
+
+export type BenchmarkStatus = "idle" | "running" | "completed";
+
+export interface ManualBenchmark {
+  status: BenchmarkStatus;
+  stepIndex: number;
+  humanInteractions: number;
+  startedAtMs: number | null;
+  proposalReadyAtMs: number | null;
+  elapsedMs: number | null;
+  lastEvidence: string;
+}
+
+export interface AgentBenchmark {
+  status: BenchmarkStatus;
+  humanIntents: number;
+  humanApprovals: number;
+  toolCalls: number;
+  startedAtMs: number | null;
+  proposalReadyAtMs: number | null;
+  elapsedMs: number | null;
+}
+
+export interface BenchmarkState {
+  mode: "idle" | "manual" | "agent";
+  manual: ManualBenchmark;
+  agent: AgentBenchmark;
 }
 
 export interface HeroScenarioState {
@@ -150,11 +182,14 @@ export interface HeroScenarioState {
   webMcpTrace: WebMcpTraceEntry[];
   decisionPipeline: Record<DecisionStage, StageStatus>;
   metrics: OperationMetrics;
+  benchmark: BenchmarkState;
   blockageInjected: boolean;
   telemetry: {
     scenarioClockMs: number;
     distanceTravelledMeters: number;
     replans: number;
+    pendingTimerCount: number;
+    faultState: "none" | "aisle_blockage";
     trace: string[];
   };
 }

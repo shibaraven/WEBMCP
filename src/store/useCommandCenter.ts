@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createHeroState } from "../domain/heroSeed";
+import { advanceManualBenchmark, prepareAgentBenchmark } from "../domain/benchmark";
 import {
   advanceMission,
   approveTransportProposal,
@@ -49,6 +50,8 @@ export function useCommandCenter() {
   const [resetCount, setResetCount] = useState(0);
   const [operatorNotice, setOperatorNotice] = useState("Ready for a safe transport proposal.");
   const stateRef = useRef(state);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timerGenerationRef = useRef(0);
 
   const commit = useCallback((next: HeroScenarioState) => {
     stateRef.current = next;
@@ -58,22 +61,37 @@ export function useCommandCenter() {
   const executeCommand = useCallback<WebMcpCommandExecutor>((name, input) => {
     const started = nowMs();
     const current = stateRef.current;
-    let next = current;
+    const previousAgent = current.benchmark.agent;
+    const agentStartedAt = previousAgent.startedAtMs ?? started;
+    const working: HeroScenarioState = {
+      ...current,
+      benchmark: {
+        ...current.benchmark,
+        mode: "agent",
+        agent: {
+          ...previousAgent,
+          status: previousAgent.status === "completed" ? "completed" : "running",
+          humanIntents: previousAgent.humanIntents || 1,
+          startedAtMs: agentStartedAt,
+        },
+      },
+    };
+    let next = working;
     let output: unknown;
 
     switch (name) {
       case "get_operational_snapshot": {
-        output = getOperationalSnapshot(current);
-        next = { ...current, decisionPipeline: { ...current.decisionPipeline, OBSERVE: "complete" } };
+        output = getOperationalSnapshot(working);
+        next = { ...working, decisionPipeline: { ...working.decisionPipeline, OBSERVE: "complete" } };
         break;
       }
       case "inspect_location": {
-        output = inspectLocation(current, String(input.locationId ?? ""));
-        next = { ...current, decisionPipeline: { ...current.decisionPipeline, OBSERVE: "complete" } };
+        output = inspectLocation(working, String(input.locationId ?? ""));
+        next = { ...working, decisionPipeline: { ...working.decisionPipeline, OBSERVE: "complete" } };
         break;
       }
       case "plan_transport": {
-        const transition = runTransportPlan(current, {
+        const transition = runTransportPlan(working, {
           palletId: String(input.palletId ?? ""),
           destinationId: String(input.destinationId ?? ""),
           agvId: typeof input.agvId === "string" ? input.agvId : undefined,
@@ -94,7 +112,7 @@ export function useCommandCenter() {
         break;
       }
       case "propose_transport": {
-        const transition = createTransportProposal(current, {
+        const transition = createTransportProposal(working, {
           palletId: String(input.palletId ?? ""),
           destinationId: String(input.destinationId ?? ""),
           agvId: typeof input.agvId === "string" ? input.agvId : undefined,
@@ -106,11 +124,11 @@ export function useCommandCenter() {
         break;
       }
       case "get_mission_status": {
-        output = getMissionStatus(current, String(input.missionId ?? ""));
+        output = getMissionStatus(working, String(input.missionId ?? ""));
         break;
       }
       case "replan_mission": {
-        const transition = beginMissionReplan(current, String(input.missionId ?? ""));
+        const transition = beginMissionReplan(working, String(input.missionId ?? ""));
         next = transition.state;
         output = transition.result.status === "route_updated"
           ? {
@@ -123,12 +141,15 @@ export function useCommandCenter() {
         break;
       }
       case "get_operation_metrics": {
-        output = { ...getOperationMetrics(current), toolCalls: current.metrics.toolCalls + 1 };
+        output = { ...getOperationMetrics(working), toolCalls: working.metrics.toolCalls + 1 };
         break;
       }
     }
 
-    const latencyMs = Number(Math.max(0, nowMs() - started).toFixed(3));
+    const finished = nowMs();
+    const latencyMs = Number(Math.max(0, finished - started).toFixed(3));
+    const outputStatus = (output as Record<string, unknown>)?.status;
+    const proposalReady = name === "propose_transport" && outputStatus === "approval_required";
     const entry: WebMcpTraceEntry = {
       id: current.metrics.toolCalls + 1,
       toolName: name,
@@ -140,7 +161,24 @@ export function useCommandCenter() {
     next = {
       ...next,
       webMcpTrace: [entry, ...next.webMcpTrace].slice(0, 30),
-      metrics: { ...next.metrics, toolCalls: current.metrics.toolCalls + 1 },
+      metrics: {
+        ...next.metrics,
+        toolCalls: current.metrics.toolCalls + 1,
+        totalToolLatencyMs: Number((current.metrics.totalToolLatencyMs + latencyMs).toFixed(3)),
+      },
+      benchmark: {
+        ...next.benchmark,
+        mode: "agent",
+        agent: {
+          ...next.benchmark.agent,
+          status: proposalReady ? "completed" : next.benchmark.agent.status,
+          toolCalls: previousAgent.toolCalls + 1,
+          humanIntents: previousAgent.humanIntents || 1,
+          startedAtMs: agentStartedAt,
+          proposalReadyAtMs: proposalReady ? finished : next.benchmark.agent.proposalReadyAtMs,
+          elapsedMs: proposalReady ? Number(Math.max(0, finished - agentStartedAt).toFixed(3)) : next.benchmark.agent.elapsedMs,
+        },
+      },
     };
     commit(next);
     setOperatorNotice(entry.status === "success" ? `${name} completed.` : entry.summary);
@@ -159,7 +197,23 @@ export function useCommandCenter() {
 
   const approve = useCallback(() => {
     const transition = approveTransportProposal(stateRef.current);
-    commit(transition.state);
+    const approved = transition.result.status === "approved";
+    const next = approved
+      ? {
+          ...transition.state,
+          benchmark: {
+            ...transition.state.benchmark,
+            agent: {
+              ...transition.state.benchmark.agent,
+              humanApprovals: transition.state.benchmark.mode === "agent"
+                ? transition.state.benchmark.agent.humanApprovals + 1
+                : transition.state.benchmark.agent.humanApprovals,
+            },
+          },
+          telemetry: { ...transition.state.telemetry, pendingTimerCount: 1 },
+        }
+      : transition.state;
+    commit(next);
     setOperatorNotice(transition.result.status === "approved" ? "Human approval recorded. Mission will start." : transition.result.reason ?? "Approval rejected.");
   }, [commit]);
 
@@ -170,8 +224,13 @@ export function useCommandCenter() {
   }, [commit]);
 
   const replan = useCallback(() => {
-    return executeCommand("replan_mission", { missionId: "M-001" });
-  }, [executeCommand]);
+    const result = executeCommand("replan_mission", { missionId: "M-001" });
+    const current = stateRef.current;
+    if (current.mission?.status === "replanning") {
+      commit({ ...current, telemetry: { ...current.telemetry, pendingTimerCount: 1 } });
+    }
+    return result;
+  }, [commit, executeCommand]);
 
   const safetyProbe = useCallback((kind: "destination" | "battery") => {
     const input: PlanTransportInput = kind === "destination"
@@ -185,31 +244,78 @@ export function useCommandCenter() {
   }, [executeCommand]);
 
   const reset = useCallback(() => {
+    timerGenerationRef.current += 1;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
     const fresh = createHeroState();
     commit(fresh);
     setResetCount((count) => count + 1);
-    setOperatorNotice("HERO-001 reset: mission, proposal, blockage, trace and metrics cleared.");
+    setOperatorNotice("HERO-001 reset: mission, proposal, trace, metrics, timers and fault state cleared.");
+  }, [commit]);
+
+  const manualBenchmarkStep = useCallback(() => {
+    const next = advanceManualBenchmark(stateRef.current, nowMs());
+    commit(next);
+    setOperatorNotice(next.benchmark.manual.lastEvidence);
+  }, [commit]);
+
+  const armAgentBenchmark = useCallback(() => {
+    timerGenerationRef.current += 1;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    const next = prepareAgentBenchmark(stateRef.current);
+    commit(next);
+    setOperatorNotice("Fresh HERO-001 armed for the WebMCP Agent benchmark. Send one intent now.");
   }, [commit]);
 
   const missionStatus = state.mission?.status;
   const routeIndex = state.mission?.routeIndex;
   useEffect(() => {
     if (!missionStatus) return;
+    const generation = timerGenerationRef.current;
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (missionStatus === "approved") {
-      timer = setTimeout(() => commit(startApprovedMission(stateRef.current).state), 450);
+      timer = setTimeout(() => {
+        if (generation !== timerGenerationRef.current) return;
+        const transition = startApprovedMission(stateRef.current);
+        commit({ ...transition.state, telemetry: { ...transition.state.telemetry, pendingTimerCount: transition.result.status === "running" ? 1 : 0 } });
+      }, 450);
     } else if (missionStatus === "running") {
       timer = setTimeout(() => {
+        if (generation !== timerGenerationRef.current) return;
         const transition = advanceMission(stateRef.current);
-        commit(transition.state);
+        const pendingTimerCount = transition.result.status === "running" ? 1 : 0;
+        commit({ ...transition.state, telemetry: { ...transition.state.telemetry, pendingTimerCount } });
         if (transition.result.status === "blocked") setOperatorNotice("Aisle N07-N09 blocked. AGV-03 stopped safely and requires replanning.");
         if (transition.result.status === "completed") setOperatorNotice("Mission completed. P-104 delivered to RACK-A12.");
       }, 850);
     } else if (missionStatus === "replanning") {
-      timer = setTimeout(() => commit(resumeReplannedMission(stateRef.current).state), 500);
+      timer = setTimeout(() => {
+        if (generation !== timerGenerationRef.current) return;
+        const transition = resumeReplannedMission(stateRef.current);
+        commit({ ...transition.state, telemetry: { ...transition.state.telemetry, pendingTimerCount: transition.result.status === "running" ? 1 : 0 } });
+      }, 500);
     }
-    return () => { if (timer) clearTimeout(timer); };
+    timerRef.current = timer ?? null;
+    return () => {
+      if (timer) clearTimeout(timer);
+      if (timerRef.current === timer) timerRef.current = null;
+    };
   }, [commit, missionStatus, routeIndex]);
 
-  return { state, webMcp, resetCount, operatorNotice, propose, approve, reject, replan, safetyProbe, reset, executeCommand };
+  return {
+    state,
+    webMcp,
+    resetCount,
+    operatorNotice,
+    propose,
+    approve,
+    reject,
+    replan,
+    safetyProbe,
+    reset,
+    manualBenchmarkStep,
+    armAgentBenchmark,
+    executeCommand,
+  };
 }

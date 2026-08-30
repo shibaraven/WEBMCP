@@ -39,3 +39,7 @@ yarn-error.log*
 /outputs/
 /work/
 *.tsbuildinfo
+
+# generated narration / video QA intermediates
+/submission/*.wav
+/submission/video-frames/qa-*.png

@@ -118,6 +118,7 @@ test("full approved mission recovers and delivers P-104 to RACK-A12", () => {
   assert.equal(state.fleet.find((agv) => agv.id === "AGV-03")?.status, "idle");
   assert.equal(state.metrics.completedMissions, 1);
   assert.equal(state.metrics.successfulReplans, 1);
+  assert.equal(state.metrics.replanAttempts, 1);
 });
 
 test("replanning is rejected unless the mission is blocked", () => {
@@ -137,6 +138,11 @@ test("complete reset clears proposal, mission, blockage, metrics and traces", ()
   assert.equal(reset.proposal, null);
   assert.equal(reset.webMcpTrace.length, 0);
   assert.equal(reset.metrics.toolCalls, 0);
+  assert.equal(reset.metrics.totalToolLatencyMs, 0);
+  assert.equal(reset.benchmark.manual.status, "idle");
+  assert.equal(reset.benchmark.agent.status, "idle");
+  assert.equal(reset.telemetry.pendingTimerCount, 0);
+  assert.equal(reset.telemetry.faultState, "none");
   assert.equal(reset.edges.some((edge) => edge.blocked), false);
 });
 

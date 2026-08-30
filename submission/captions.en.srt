@@ -1,0 +1,103 @@
+1
+00:00:00,000 --> 00:00:07,000
+Warehouse software was designed for humans clicking through screens,
+
+2
+00:00:07,000 --> 00:00:14,000
+not for AI agents operating safely with physical systems.
+
+3
+00:00:14,000 --> 00:00:21,000
+Physical AI WebMCP Command Center turns the web into an agent-native control layer.
+
+4
+00:00:21,000 --> 00:00:29,000
+A compatible Agent discovers seven structured tools on this public HTTPS page.
+
+5
+00:00:29,000 --> 00:00:34,000
+One intent asks to move pallet P-104 to Rack A12.
+
+6
+00:00:34,000 --> 00:00:39,000
+The Agent observes warehouse state, source, and transport options.
+
+7
+00:00:39,000 --> 00:00:44,000
+Every real planning stage is visible and timed:
+
+8
+00:00:44,000 --> 00:00:49,000
+pallet, destination, AGV, route, battery, safety, and selection.
+
+9
+00:00:49,000 --> 00:00:54,000
+The Agent selects AGV-03 and creates TP-001 - but cannot start it.
+
+10
+00:00:54,000 --> 00:01:00,000
+Deterministic software validates the 41.6-meter route and battery reserve.
+
+11
+00:01:00,000 --> 00:01:08,000
+A human reviews the proposal and approves the high-impact action.
+
+12
+00:01:08,000 --> 00:01:14,000
+AGV-03 starts moving with P-104.
+
+13
+00:01:14,000 --> 00:01:21,000
+At N07, the active aisle becomes blocked.
+
+14
+00:01:21,000 --> 00:01:28,000
+The vehicle stops immediately. Mission M-001 enters BLOCKED.
+
+15
+00:01:28,000 --> 00:01:34,000
+The Agent reads changed mission state and invokes replan_mission.
+
+16
+00:01:34,000 --> 00:01:41,000
+Dijkstra removes the blocked edge and routes through N08 and N11.
+
+17
+00:01:41,000 --> 00:01:48,000
+The route changes visibly, and AGV-03 resumes.
+
+18
+00:01:48,000 --> 00:01:54,000
+P-104 reaches Rack A12. AGV-03 returns to idle.
+
+19
+00:01:54,000 --> 00:02:04,000
+Mission complete. Tool names, results, and true latency remain visible.
+
+20
+00:02:04,000 --> 00:02:09,000
+The live benchmark compares the same endpoint.
+
+21
+00:02:09,000 --> 00:02:15,000
+Manual UI: seven measured interactions.
+
+22
+00:02:15,000 --> 00:02:20,000
+WebMCP: one intent plus one human approval.
+
+23
+00:02:20,000 --> 00:02:25,000
+Tool calls and runtime metrics are counted separately.
+
+24
+00:02:25,000 --> 00:02:29,000
+The Agent proposes. Deterministic software validates.
+
+25
+00:02:29,000 --> 00:02:33,000
+The human authorizes. Physical AI executes.
+
+26
+00:02:33,000 --> 00:02:38,000
+One web interface - for humans, agents, and physical machines.

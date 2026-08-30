@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo } from "react";
+import { MANUAL_BENCHMARK_STEPS } from "../domain/benchmark";
 import { calculateHeroRoute } from "../domain/heroScenario";
+import { getOperationMetrics } from "../domain/missionEngine";
 import type { DecisionStage, HeroScenarioState, NodeId, WarehouseEdge, WarehouseNode } from "../domain/types";
 import { useCommandCenter } from "../store/useCommandCenter";
 import { WEBMCP_TOOL_NAMES } from "../webmcp/tools";
@@ -159,8 +161,129 @@ function ApprovalPanel({
   );
 }
 
+function formatDuration(value: number | null) {
+  return value === null ? "NOT MEASURED" : `${value.toFixed(3)} ms`;
+}
+
+function BenchmarkPanel({
+  state,
+  onManualStep,
+  onArmAgent,
+}: {
+  state: HeroScenarioState;
+  onManualStep: () => void;
+  onArmAgent: () => void;
+}) {
+  const manual = state.benchmark.manual;
+  const agent = state.benchmark.agent;
+  const nextStep = MANUAL_BENCHMARK_STEPS[manual.stepIndex];
+  const agentHumanInputs = agent.humanIntents + agent.humanApprovals;
+  const reduction = manual.humanInteractions > 0 && agentHumanInputs > 0
+    ? ((manual.humanInteractions - agentHumanInputs) / manual.humanInteractions) * 100
+    : null;
+  const speedup = manual.elapsedMs && agent.elapsedMs ? manual.elapsedMs / agent.elapsedMs : null;
+
+  return (
+    <article className="panel benchmark-panel">
+      <div className="panel-heading">
+        <div><span className="panel-index">06</span><h2>Human vs Agent - live benchmark</h2></div>
+        <span className="score">SAME ENGINE / SAME ENDPOINT</span>
+      </div>
+      <div className="benchmark-boundary">
+        <span>START: first task-specific action</span><i />
+        <span>STOP: TP-001 rendered</span>
+      </div>
+      <div className="benchmark-columns">
+        <div className="benchmark-mode">
+          <small>MANUAL UI</small>
+          <strong>{manual.humanInteractions} interactions</strong>
+          <span>{formatDuration(manual.elapsedMs)}</span>
+          <p>{manual.lastEvidence}</p>
+          {manual.status !== "completed" ? (
+            <button className="button button--wide" onClick={onManualStep} disabled={Boolean(state.mission) || state.benchmark.mode === "agent"}>
+              {nextStep?.label ?? "Manual complete"}
+            </button>
+          ) : (
+            <button className="button button--primary button--wide" onClick={onArmAgent}>Arm fresh Agent benchmark</button>
+          )}
+        </div>
+        <div className="benchmark-mode benchmark-mode--agent">
+          <small>WEBMCP AGENT</small>
+          <strong>{agent.humanIntents} intent + {agent.humanApprovals} approval</strong>
+          <span>{formatDuration(agent.elapsedMs)}</span>
+          <p>{agent.toolCalls} tool calls, counted separately from human input.</p>
+          <div className={`benchmark-state benchmark-state--${agent.status}`}>{agent.status.toUpperCase()}</div>
+        </div>
+        <div className="benchmark-mode benchmark-mode--comparison">
+          <small>MEASURED COMPARISON</small>
+          <strong>{reduction === null ? "PENDING" : `${reduction.toFixed(1)}% fewer interactions`}</strong>
+          <span>{speedup === null ? "Speedup pending" : `${speedup.toFixed(2)}x decision speed`}</span>
+          <p>Both modes call the same planner, safety policy and proposal engine.</p>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function MetricsPanel({ state }: { state: HeroScenarioState }) {
+  const metrics = getOperationMetrics(state);
+  const percent = (value: number) => `${(value * 100).toFixed(0)}%`;
+  return (
+    <article className="panel metrics-panel">
+      <div className="panel-heading">
+        <div><span className="panel-index">07</span><h2>Measured operation metrics</h2></div>
+        <span className="score">RUNTIME ONLY</span>
+      </div>
+      <div className="metric-grid">
+        <div><small>TOOL CALLS</small><strong>{metrics.toolCalls}</strong><span>{metrics.averageToolLatencyMs.toFixed(3)} ms avg</span></div>
+        <div><small>HUMAN APPROVALS</small><strong>{metrics.operatorApprovals}</strong><span>{metrics.operatorRejections} rejected</span></div>
+        <div><small>MISSION SUCCESS</small><strong>{percent(metrics.missionSuccessRate)}</strong><span>{metrics.completedMissions}/{metrics.transportAttempts} completed</span></div>
+        <div><small>REPLAN SUCCESS</small><strong>{percent(metrics.blockedRouteRecoveryRate)}</strong><span>{metrics.successfulReplans}/{metrics.replanAttempts} recovered</span></div>
+        <div><small>UNSAFE REJECTION</small><strong>{percent(metrics.unsafeRequestRejectionRate)}</strong><span>{metrics.unsafeRejections}/{metrics.unsafeRequests} blocked</span></div>
+        <div><small>ROUTE / AGV</small><strong>{metrics.routeLengthMeters.toFixed(1)} m</strong><span>{metrics.selectedAgv ?? "not selected"}</span></div>
+      </div>
+    </article>
+  );
+}
+
+function LiveE2EPanel({ state, discoveredCount }: { state: HeroScenarioState; discoveredCount: number }) {
+  const invoked = new Set(state.webMcpTrace.map((entry) => entry.toolName));
+  const invokedCount = WEBMCP_TOOL_NAMES.filter((name) => invoked.has(name)).length;
+  const completed = discoveredCount === 7 && invokedCount === 7 && state.mission?.status === "completed";
+  return (
+    <article className="panel live-e2e-panel">
+      <div className="panel-heading">
+        <div><span className="panel-index">08</span><h2>Live Agent E2E proof</h2></div>
+        <span className={`score ${completed ? "safe" : ""}`}>{completed ? "VERIFIED" : "AWAITING AGENT"}</span>
+      </div>
+      <div className="e2e-proof">
+        <div><small>PRODUCTION DISCOVERY</small><strong>{discoveredCount}/7 tools</strong></div>
+        <div><small>ACTUAL TOOL COVERAGE</small><strong>{invokedCount}/7 invoked</strong></div>
+        <div><small>HERO OUTCOME</small><strong>{state.mission?.status.toUpperCase() ?? "NOT RUN"}</strong></div>
+      </div>
+      <details>
+        <summary>Copy the complete Hero Prompt</summary>
+        <p>Move pallet P-104 from INBOUND-01 to RACK-A12 safely. Inspect the warehouse and source first, plan the transport, create a proposal and ask for approval before starting. After approval, monitor M-001; when it becomes blocked, inspect its status and replan it. After completion, return operation metrics. Use all seven available warehouse tools during this workflow.</p>
+      </details>
+    </article>
+  );
+}
+
 export function CommandCenterShell() {
-  const { state, webMcp, resetCount, operatorNotice, propose, approve, reject, replan, safetyProbe, reset } = useCommandCenter();
+  const {
+    state,
+    webMcp,
+    resetCount,
+    operatorNotice,
+    propose,
+    approve,
+    reject,
+    replan,
+    safetyProbe,
+    reset,
+    manualBenchmarkStep,
+    armAgentBenchmark,
+  } = useCommandCenter();
   const route = useMemo(() => state.mission?.route ?? state.proposal?.plannedRoute ?? calculateHeroRoute(state).path, [state]);
   const distance = state.mission?.distanceMeters ?? state.proposal?.distanceMeters ?? calculateHeroRoute(state).distanceMeters;
   const operationState = state.mission?.status ?? (state.proposal?.status === "waiting" ? "approval required" : "ready");
@@ -264,6 +387,22 @@ export function CommandCenterShell() {
             )) : <p>Safety policy owns execution authority. The agent can propose; it cannot bypass validation or approval.</p>}
           </div>
         </article>
+      </section>
+
+      <section className="measurement-grid">
+        <BenchmarkPanel state={state} onManualStep={manualBenchmarkStep} onArmAgent={armAgentBenchmark} />
+        <MetricsPanel state={state} />
+        <LiveE2EPanel state={state} discoveredCount={webMcp.discoveredCount} />
+      </section>
+
+      <section className="reset-proof" aria-label="Complete reset scope">
+        <strong>COMPLETE RESET SCOPE</strong>
+        <span>MISSION {state.mission ? "ACTIVE" : "0"}</span>
+        <span>PROPOSAL {state.proposal ? "ACTIVE" : "0"}</span>
+        <span>TRACE {state.webMcpTrace.length}</span>
+        <span>METRICS {state.metrics.toolCalls}</span>
+        <span>TIMER {state.telemetry.pendingTimerCount}</span>
+        <span>FAULT {state.telemetry.faultState.toUpperCase()}</span>
       </section>
 
       <footer><span>PHYSICAL AI x WEBMCP</span><span>RESET VERIFIED x {resetCount}</span><span>AI PROPOSES / SOFTWARE VALIDATES / HUMAN APPROVES</span></footer>

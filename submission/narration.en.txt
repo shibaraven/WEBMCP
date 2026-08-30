@@ -1,0 +1,17 @@
+Warehouse software was designed for humans clicking through screens, not for A I agents operating safely with physical systems.
+
+Physical A I Web M C P Command Center turns the web into an agent-native control layer. A compatible Agent discovers seven structured tools directly on this public H T T P S page.
+
+One intent asks to move pallet P one-oh-four to Rack A twelve. The Agent observes the warehouse, inspects the source, and plans transport. Every real stage is visible: pallet, destination, A G V candidates, route, battery, safety, and vehicle selection. These are measured runtime events, not fake A I loading.
+
+The Agent selects A G V zero-three and creates T P zero-zero-one, but cannot start it. Deterministic software validates the forty-one point six meter route and battery reserve. A human reviews the proposal and approves the high-impact action.
+
+A G V zero-three starts moving with P one-oh-four. At node N zero-seven, the active aisle becomes blocked. The vehicle stops immediately and mission M zero-zero-one enters the blocked state.
+
+The Agent reads the changed mission state and invokes replan mission. Dijkstra removes the blocked edge and returns the safe alternative through N zero-eight and N eleven. The route visibly changes, and A G V zero-three resumes.
+
+P one-oh-four reaches Rack A twelve, A G V zero-three returns to idle, and the mission completes. Tool names, results, and true latency remain visible in the Web M C P trace.
+
+The live benchmark compares the same endpoint. Manual U I needs seven measured interactions. Web M C P needs one intent plus one human approval, while tool calls are counted separately. Success, recovery, rejection, planning, route, and latency metrics all come from this run.
+
+The Agent proposes. Deterministic software validates. The human authorizes. Physical A I executes. The web becomes an operational interface shared by humans, agents, and physical machines.

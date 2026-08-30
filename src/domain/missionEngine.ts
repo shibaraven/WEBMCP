@@ -38,7 +38,11 @@ function withPlanningResult(state: HeroScenarioState, planning: PlanTransportRes
       VALIDATE: rejected ? "warning" : "complete",
     },
     metrics: rejected
-      ? { ...state.metrics, unsafeRejections: state.metrics.unsafeRejections + 1 }
+      ? {
+          ...state.metrics,
+          unsafeRequests: state.metrics.unsafeRequests + 1,
+          unsafeRejections: state.metrics.unsafeRejections + 1,
+        }
       : state.metrics,
   };
 }
@@ -130,6 +134,7 @@ export function rejectTransportProposal(
       ...state,
       proposal: { ...state.proposal, status: "rejected" },
       decisionPipeline: { ...state.decisionPipeline, APPROVE: "warning" },
+      metrics: { ...state.metrics, operatorRejections: state.metrics.operatorRejections + 1 },
     },
     result: { status: "rejected", proposalId: state.proposal.id, reason: "Human operator rejected the proposal." },
   };
@@ -198,7 +203,11 @@ export function advanceMission(state: HeroScenarioState): EngineTransition<{ sta
         mission: { ...movedState.mission!, status: "blocked" },
         fleet: updateAgv(movedState, mission.agvId, { status: "blocked" }),
         decisionPipeline: { ...movedState.decisionPipeline, EXECUTE: "warning", RECOVER: "active" },
-        telemetry: { ...movedState.telemetry, trace: [...movedState.telemetry.trace, "AISLE_BLOCKED N07-N09"] },
+        telemetry: {
+          ...movedState.telemetry,
+          faultState: "aisle_blockage",
+          trace: [...movedState.telemetry.trace, "AISLE_BLOCKED N07-N09"],
+        },
       },
       result: { status: "blocked", nodeId: nextNode },
     };
@@ -215,25 +224,29 @@ export function beginMissionReplan(
   | { status: "route_updated"; previousRoute: NodeId[]; newRoute: NodeId[]; additionalDistanceMeters: number }
   | { status: "rejected"; reason: string }
 > {
-  const mission = state.mission;
-  if (!mission || mission.id !== missionId) return { state, result: { status: "rejected", reason: `Mission ${missionId} does not exist.` } };
-  if (mission.status !== "blocked") return { state, result: { status: "rejected", reason: `Mission ${missionId} is not blocked.` } };
+  const attemptedState = {
+    ...state,
+    metrics: { ...state.metrics, replanAttempts: state.metrics.replanAttempts + 1 },
+  };
+  const mission = attemptedState.mission;
+  if (!mission || mission.id !== missionId) return { state: attemptedState, result: { status: "rejected", reason: `Mission ${missionId} does not exist.` } };
+  if (mission.status !== "blocked") return { state: attemptedState, result: { status: "rejected", reason: `Mission ${missionId} is not blocked.` } };
 
   const currentNode = mission.route[mission.routeIndex];
   const previousRoute = mission.route.slice(mission.routeIndex);
-  const route = findShortestPath(state.nodes, state.edges, currentNode, mission.destinationId);
-  if (!route.found) return { state, result: { status: "rejected", reason: "No safe recovery route exists." } };
+  const route = findShortestPath(attemptedState.nodes, attemptedState.edges, currentNode, mission.destinationId);
+  if (!route.found) return { state: attemptedState, result: { status: "rejected", reason: "No safe recovery route exists." } };
 
-  const previousDistance = previousRoute.slice(0, -1).reduce((total, node, index) => total + edgeDistance(state, node, previousRoute[index + 1]), 0);
+  const previousDistance = previousRoute.slice(0, -1).reduce((total, node, index) => total + edgeDistance(attemptedState, node, previousRoute[index + 1]), 0);
   const additionalDistanceMeters = Number((route.distanceMeters - previousDistance).toFixed(1));
   return {
     state: {
-      ...state,
+      ...attemptedState,
       mission: { ...mission, status: "replanning", previousRoute, route: route.path, routeIndex: 0, progressPercent: 0, distanceMeters: route.distanceMeters },
-      fleet: updateAgv(state, mission.agvId, { status: "waiting" }),
-      decisionPipeline: { ...state.decisionPipeline, RECOVER: "active" },
-      metrics: { ...state.metrics, successfulReplans: state.metrics.successfulReplans + 1 },
-      telemetry: { ...state.telemetry, replans: state.telemetry.replans + 1, trace: [...state.telemetry.trace, "REPLAN N07-N08-N11-RACK-A12"] },
+      fleet: updateAgv(attemptedState, mission.agvId, { status: "waiting" }),
+      decisionPipeline: { ...attemptedState.decisionPipeline, RECOVER: "active" },
+      metrics: { ...attemptedState.metrics, successfulReplans: attemptedState.metrics.successfulReplans + 1 },
+      telemetry: { ...attemptedState.telemetry, replans: attemptedState.telemetry.replans + 1, trace: [...attemptedState.telemetry.trace, "REPLAN N07-N08-N11-RACK-A12"] },
     },
     result: { status: "route_updated", previousRoute, newRoute: route.path, additionalDistanceMeters },
   };
@@ -302,11 +315,18 @@ export function getMissionStatus(state: HeroScenarioState, missionId: string) {
 }
 
 export function getOperationMetrics(state: HeroScenarioState) {
+  const missionSuccessRate = state.metrics.transportAttempts === 0 ? 0 : state.metrics.completedMissions / state.metrics.transportAttempts;
+  const blockedRouteRecoveryRate = state.metrics.replanAttempts === 0 ? 0 : state.metrics.successfulReplans / state.metrics.replanAttempts;
+  const unsafeRequestRejectionRate = state.metrics.unsafeRequests === 0 ? 0 : state.metrics.unsafeRejections / state.metrics.unsafeRequests;
   return {
     ...state.metrics,
-    missionSuccessRate: state.metrics.transportAttempts === 0 ? 0 : state.metrics.completedMissions / state.metrics.transportAttempts,
-    blockedRouteRecoveryRate: state.blockageInjected ? state.metrics.successfulReplans : 0,
+    missionSuccessRate,
+    blockedRouteRecoveryRate,
+    unsafeRequestRejectionRate,
+    averageToolLatencyMs: state.metrics.toolCalls === 0 ? 0 : state.metrics.totalToolLatencyMs / state.metrics.toolCalls,
     routeLengthMeters: state.mission?.distanceMeters ?? state.proposal?.distanceMeters ?? 0,
     selectedAgv: state.mission?.agvId ?? state.proposal?.recommendedAgvId ?? null,
+    planningTotalMs: state.planningTrace?.totalPlanningMs ?? 0,
+    benchmark: state.benchmark,
   };
 }
