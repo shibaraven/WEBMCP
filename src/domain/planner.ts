@@ -1,5 +1,5 @@
 import { findShortestPath } from "./dijkstra";
-import { validateTransportPlan } from "./safety";
+import { navigableEdgesForAgv, validateTransportPlan } from "./safety";
 import type {
   Agv,
   HeroScenarioState,
@@ -48,15 +48,12 @@ export function planTransport(
   });
 
   const candidates = measure("evaluate-agvs", "Evaluate AGVs", () => {
-    const available = state.fleet.filter((agv) => agv.status === "idle" && agv.currentTaskId === null);
+    const available = state.fleet.filter((agv) =>
+      agv.status === "idle" && agv.currentTaskId === null && agv.heartbeatStatus === "online",
+    );
     const value = input.agvId ? state.fleet.filter((agv) => agv.id === input.agvId) : available;
-    return { value, evidence: `${available.length} available / ${value.length} considered` };
-  });
-
-  const route = measure<RouteResult | null>("calculate-routes", "Calculate routes", () => {
-    if (!pallet || !destination) return { value: null, evidence: "Route skipped: endpoint missing" };
-    const value = findShortestPath(state.nodes, state.edges, pallet.nodeId, destination.id);
-    return { value, evidence: value.found ? `${value.distanceMeters.toFixed(1)} m / ${value.path.length} nodes` : "No route found" };
+    const expired = state.fleet.filter((agv) => agv.heartbeatStatus === "expired").length;
+    return { value, evidence: `${available.length} available / ${value.length} considered / ${expired} heartbeat expired` };
   });
 
   const selectedCandidate = candidates
@@ -65,6 +62,23 @@ export function planTransport(
       const preferredDelta = Number(b.id === state.preferredAgvId) - Number(a.id === state.preferredAgvId);
       return preferredDelta || b.batteryPercent - a.batteryPercent || a.id.localeCompare(b.id);
     })[0] ?? null;
+
+  const route = measure<RouteResult | null>("calculate-routes", "Calculate routes", () => {
+    if (!pallet || !destination) return { value: null, evidence: "Route skipped: endpoint missing" };
+    const foreignReservations = state.trafficReservations.filter((reservation) =>
+      reservation.reservedByAgvId !== selectedCandidate?.id,
+    );
+    const value = findShortestPath(
+      state.nodes,
+      navigableEdgesForAgv(state, selectedCandidate?.id ?? null),
+      pallet.nodeId,
+      destination.id,
+    );
+    const reservationEvidence = foreignReservations.length > 0
+      ? ` / avoided ${foreignReservations.length} foreign reservation`
+      : "";
+    return { value, evidence: value.found ? `${value.distanceMeters.toFixed(1)} m / ${value.path.length} nodes${reservationEvidence}` : `No route found${reservationEvidence}` };
+  });
 
   const batteryAfter = measure<number | null>("battery-reserve", "Battery reserve", () => {
     if (!selectedCandidate || !route?.found) return { value: null, evidence: "Battery estimate unavailable" };

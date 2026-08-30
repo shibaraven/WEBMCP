@@ -31,11 +31,13 @@ function MapEdge({
   nodes,
   route,
   routeIndex,
+  reserved,
 }: {
   edge: WarehouseEdge;
   nodes: readonly WarehouseNode[];
   route: readonly NodeId[];
   routeIndex: number;
+  reserved: boolean;
 }) {
   const from = nodes.find((node) => node.id === edge.from)!;
   const to = nodes.find((node) => node.id === edge.to)!;
@@ -49,7 +51,7 @@ function MapEdge({
   return (
     <span
       aria-hidden="true"
-      className={`map-edge${active ? " map-edge--active" : ""}${traversed ? " map-edge--traversed" : ""}${edge.blocked ? " map-edge--blocked" : ""}`}
+      className={`map-edge${active ? " map-edge--active" : ""}${traversed ? " map-edge--traversed" : ""}${reserved ? " map-edge--reserved" : ""}${edge.blocked ? " map-edge--blocked" : ""}`}
       style={{ left: `${from.x}%`, top: `${from.y}%`, width: `${width}%`, transform: `rotate(${angle}deg)` }}
     />
   );
@@ -69,7 +71,14 @@ function WarehouseMap({ state }: { state: HeroScenarioState }) {
     <div className="warehouse-map" aria-label="Live HERO-001 warehouse digital twin">
       <div className="map-grid" aria-hidden="true" />
       {state.edges.map((edge) => (
-        <MapEdge key={edge.id} edge={edge} nodes={state.nodes} route={route} routeIndex={routeIndex} />
+        <MapEdge
+          key={edge.id}
+          edge={edge}
+          nodes={state.nodes}
+          route={route}
+          routeIndex={routeIndex}
+          reserved={state.trafficReservations.some((reservation) => reservation.edgeId === edge.id)}
+        />
       ))}
       {state.nodes.map((node) => (
         <div key={node.id} className={`map-node map-node--${node.kind}`} style={{ left: `${node.x}%`, top: `${node.y}%` }}>
@@ -84,6 +93,9 @@ function WarehouseMap({ state }: { state: HeroScenarioState }) {
       </div>
       {state.edges.some((edge) => edge.id === "E-07-09" && edge.blocked) && (
         <div className="blockage-flag" style={{ left: "56%", top: "36%" }}>AISLE BLOCKED</div>
+      )}
+      {state.trafficReservations.some((reservation) => reservation.edgeId === "E-07-09") && (
+        <div className="reservation-flag" style={{ left: "56%", top: "36%" }}>RESERVED / AGV-02</div>
       )}
     </div>
   );
@@ -253,6 +265,36 @@ function MetricsPanel({ state }: { state: HeroScenarioState }) {
         <div><small>REPLAN SUCCESS</small><strong>{percent(metrics.blockedRouteRecoveryRate)}</strong><span>{metrics.successfulReplans}/{metrics.replanAttempts} recovered</span></div>
         <div><small>UNSAFE REJECTION</small><strong>{percent(metrics.unsafeRequestRejectionRate)}</strong><span>{metrics.unsafeRejections}/{metrics.unsafeRequests} blocked</span></div>
         <div><small>ROUTE / AGV</small><strong>{metrics.routeLengthMeters.toFixed(1)} m</strong><span>original {metrics.originalRouteLengthMeters.toFixed(1)} / remaining {metrics.remainingRouteLengthMeters.toFixed(1)} / {metrics.selectedAgv ?? "not selected"}</span></div>
+        <div><small>INDUSTRIAL FAULT</small><strong>{percent(metrics.industrialFaultSafeResponseRate)}</strong><span>{metrics.industrialFaultSafeResponses}/{metrics.industrialFaultTests} safe responses</span></div>
+      </div>
+    </article>
+  );
+}
+
+function IndustrialResiliencePanel({ state }: { state: HeroScenarioState }) {
+  const expiredAgvs = state.fleet.filter((agv) => agv.heartbeatStatus === "expired");
+  const reservation = state.trafficReservations[0];
+  return (
+    <article className="panel resilience-panel">
+      <div className="panel-heading">
+        <div><span className="panel-index">06</span><h2>Industrial resilience</h2></div>
+        <span className={`score ${state.telemetry.faultState === "none" ? "safe" : "danger"}`}>{state.telemetry.faultState.replaceAll("_", " ").toUpperCase()}</span>
+      </div>
+      <div className="resilience-grid">
+        <div>
+          <small>SAFE-11 / COMMUNICATION</small>
+          <strong className={expiredAgvs.length ? "danger" : "safe"}>{expiredAgvs.length ? "HEARTBEAT EXPIRED" : "ALL ONLINE"}</strong>
+          <span>{expiredAgvs.length ? `${expiredAgvs.map((agv) => agv.id).join(", ")} unavailable for assignment` : "Planner accepts only live AGV heartbeats"}</span>
+        </div>
+        <div>
+          <small>SAFE-12 / TRAFFIC RESERVATION</small>
+          <strong className={reservation ? "danger" : "safe"}>{reservation ? `${reservation.from}-${reservation.to} RESERVED` : "SEGMENTS CLEAR"}</strong>
+          <span>{reservation ? `Owned by ${reservation.reservedByAgvId}; foreign AGVs must wait or replan` : "No foreign segment conflict"}</span>
+        </div>
+        <div className="resilience-trace">
+          <small>DETERMINISTIC FAULT TRACE</small>
+          {state.telemetry.trace.length ? state.telemetry.trace.slice(-3).map((entry) => <span key={entry}>{entry}</span>) : <span>No industrial fault injected.</span>}
+        </div>
       </div>
     </article>
   );
@@ -299,6 +341,7 @@ export function CommandCenterShell() {
   const route = useMemo(() => state.mission?.route ?? state.proposal?.plannedRoute ?? calculateHeroRoute(state).path, [state]);
   const distance = state.mission?.distanceMeters ?? state.proposal?.distanceMeters ?? calculateHeroRoute(state).distanceMeters;
   const operationState = state.mission?.status ?? (state.proposal?.status === "waiting" ? "approval required" : "ready");
+  const industrialFaultLocked = Boolean(state.mission) || state.telemetry.faultState !== "none";
 
   return (
     <main>
@@ -323,6 +366,8 @@ export function CommandCenterShell() {
             <button className="button button--primary" onClick={() => propose()} disabled={Boolean(state.mission && state.mission.status !== "completed") || state.proposal?.status === "waiting"}>Create proposal</button>
             <button className="button" onClick={() => safetyProbe("destination")} disabled={Boolean(state.mission)}>Test invalid destination</button>
             <button className="button" onClick={() => safetyProbe("battery")} disabled={Boolean(state.mission)}>Test low battery</button>
+            <button className="button" onClick={() => safetyProbe("communication")} disabled={industrialFaultLocked}>Test communication loss</button>
+            <button className="button" onClick={() => safetyProbe("traffic")} disabled={industrialFaultLocked}>Test traffic conflict</button>
             <button className="button button--ghost" onClick={reset}>Reset demo</button>
           </div>
         </div>
@@ -348,8 +393,8 @@ export function CommandCenterShell() {
           <div className="fleet-strip">
             {state.fleet.map((agv) => (
               <div className={`fleet-unit${agv.id === "AGV-03" ? " fleet-unit--hero" : ""}`} key={agv.id}>
-                <div><strong>{agv.id}</strong><span className={`agv-status agv-status--${agv.status}`}>{statusLabels[agv.status]}</span></div>
-                <span>{agv.batteryPercent}%</span><small>{agv.nodeId}</small>
+                <div><strong>{agv.id}</strong><span className={`agv-status agv-status--${agv.heartbeatStatus === "expired" ? "offline" : agv.status}`}>{agv.heartbeatStatus === "expired" ? "COMMS LOST" : statusLabels[agv.status]}</span></div>
+                <span>{agv.batteryPercent}%</span><small>{agv.nodeId} / heartbeat {agv.heartbeatStatus}</small>
               </div>
             ))}
           </div>
@@ -402,6 +447,10 @@ export function CommandCenterShell() {
         </article>
       </section>
 
+      <section className="resilience-wrap">
+        <IndustrialResiliencePanel state={state} />
+      </section>
+
       <section className="measurement-grid">
         <BenchmarkPanel state={state} onManualStep={manualBenchmarkStep} onArmAgent={armAgentBenchmark} />
         <MetricsPanel state={state} />
@@ -415,6 +464,8 @@ export function CommandCenterShell() {
         <span>TRACE {state.webMcpTrace.length}</span>
         <span>METRICS {state.metrics.toolCalls}</span>
         <span>TIMER {state.telemetry.pendingTimerCount}</span>
+        <span>HEARTBEAT {state.fleet.filter((agv) => agv.heartbeatStatus === "expired").length}</span>
+        <span>RESERVATIONS {state.trafficReservations.length}</span>
         <span>FAULT {state.telemetry.faultState.toUpperCase()}</span>
       </section>
 

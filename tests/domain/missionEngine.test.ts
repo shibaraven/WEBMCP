@@ -11,6 +11,10 @@ import {
   runTransportPlan,
   startApprovedMission,
   getOperationMetrics,
+  injectCommunicationTimeout,
+  injectTrafficConflict,
+  runCommunicationTimeoutTest,
+  runTrafficConflictTest,
 } from "../../src/domain/missionEngine";
 import { resetHeroScenario } from "../../src/domain/heroScenario";
 import { validateTransportPlan } from "../../src/domain/safety";
@@ -33,7 +37,7 @@ test("mission cannot start before approval", () => {
   const proposed = createTransportProposal(createHeroState(), { palletId: "P-104", destinationId: "RACK-A12" }).state;
   const start = startApprovedMission(proposed);
   assert.equal(start.result.status, "rejected");
-  assert.equal(start.state.lastSafetyResult?.checks.find((check) => check.id === "START-02")?.passed, false);
+  assert.equal(start.state.lastSafetyResult?.checks.find((check) => check.id === "SAFE-09")?.passed, false);
   assert.equal(start.state.mission, null);
 });
 
@@ -72,7 +76,7 @@ test("mission start revalidates route and resource ownership after approval", ()
   };
   const start = startApprovedMission(changed);
   assert.equal(start.result.status, "rejected");
-  assert.equal(start.state.lastSafetyResult?.checks.find((check) => check.id === "START-07")?.passed, false);
+  assert.equal(start.state.lastSafetyResult?.checks.find((check) => check.id === "SAFE-10")?.passed, false);
 });
 
 test("human rejection never creates a mission", () => {
@@ -95,6 +99,51 @@ test("low-battery AGV-04 is rejected below the 20% reserve", () => {
   if (result.result.status === "rejected") assert.match(result.result.reason, /below the 20% battery safety reserve/);
 });
 
+test("SAFE-11 rejects an AGV whose communication heartbeat expired", () => {
+  const transition = runCommunicationTimeoutTest(createHeroState());
+  assert.equal(transition.result.status, "rejected");
+  if (transition.result.status === "rejected") {
+    assert.match(transition.result.reason, /communication heartbeat expired/);
+    assert.equal(transition.result.safety.checks.find((check) => check.id === "SAFE-11")?.passed, false);
+  }
+  assert.equal(transition.state.fleet.find((agv) => agv.id === "AGV-03")?.heartbeatStatus, "expired");
+  assert.equal(transition.state.metrics.communicationTimeouts, 1);
+  assert.equal(transition.state.metrics.industrialFaultTests, 1);
+  assert.equal(transition.state.metrics.industrialFaultSafeResponses, 1);
+  assert.equal(transition.state.telemetry.faultState, "communication_loss");
+});
+
+test("expired-heartbeat AGVs are excluded from automatic candidate selection", () => {
+  const state = injectCommunicationTimeout(createHeroState(), "AGV-03");
+  const result = runTransportPlan(state, { palletId: "P-104", destinationId: "RACK-A12" });
+  assert.equal(result.result.status, "rejected");
+  if (result.result.status === "rejected") assert.match(result.result.reason, /battery safety reserve/);
+  assert.match(result.state.planningTrace?.stages.find((stage) => stage.id === "evaluate-agvs")?.evidence ?? "", /1 heartbeat expired/);
+});
+
+test("SAFE-12 plans around a segment reserved by another AGV", () => {
+  const transition = runTrafficConflictTest(createHeroState());
+  assert.equal(transition.result.status, "plan_available");
+  if (transition.result.status === "plan_available") {
+    assert.deepEqual(transition.result.plan.plannedRoute, [...HERO_ALTERNATE_ROUTE]);
+    assert.equal(transition.result.plan.safety.checks.find((check) => check.id === "SAFE-12")?.passed, true);
+  }
+  assert.equal(transition.state.trafficReservations[0]?.edgeId, "E-07-09");
+  assert.equal(transition.state.metrics.trafficConflicts, 1);
+  assert.equal(transition.state.metrics.industrialFaultTests, 1);
+  assert.equal(transition.state.metrics.industrialFaultSafeResponses, 1);
+  assert.equal(transition.state.telemetry.faultState, "traffic_conflict");
+});
+
+test("SAFE-12 rejects a route that directly enters a foreign reservation", () => {
+  const state = injectTrafficConflict(createHeroState());
+  const route = { found: true, path: [...HERO_GOLDEN_ROUTE], distanceMeters: 41.6, visitedNodeCount: 5 };
+  const agv = state.fleet.find((item) => item.id === "AGV-03")!;
+  const safety = validateTransportPlan(state, { palletId: "P-104", destinationId: "RACK-A12", agv, route, estimatedBatteryAfter: 79 });
+  assert.equal(safety.status, "rejected");
+  assert.equal(safety.checks.find((check) => check.id === "SAFE-12")?.passed, false);
+});
+
 test("safety rejects a route that contains a blocked edge", () => {
   const state = createHeroState();
   state.edges.find((edge) => edge.id === "E-07-09")!.blocked = true;
@@ -102,7 +151,30 @@ test("safety rejects a route that contains a blocked edge", () => {
   const agv = state.fleet.find((item) => item.id === "AGV-03")!;
   const safety = validateTransportPlan(state, { palletId: "P-104", destinationId: "RACK-A12", agv, route, estimatedBatteryAfter: 79 });
   assert.equal(safety.status, "rejected");
-  assert.equal(safety.checks.find((check) => check.id === "SAFE-08")?.passed, false);
+  assert.equal(safety.checks.find((check) => check.id === "SAFE-07")?.passed, false);
+});
+
+test("runtime traffic conflict makes AGV-03 wait before entry and supports a safe replan", () => {
+  let state = createTransportProposal(createHeroState(), { palletId: "P-104", destinationId: "RACK-A12" }).state;
+  state = startApprovedMission(approveTransportProposal(state).state).state;
+  state = { ...state, blockageInjected: true };
+  state = advanceMission(state).state;
+  state = advanceMission(state).state;
+  assert.equal(state.fleet.find((agv) => agv.id === "AGV-03")?.nodeId, "N07");
+
+  state = injectTrafficConflict(state);
+  const waiting = advanceMission(state);
+  assert.equal(waiting.result.status, "blocked");
+  assert.equal(waiting.state.mission?.routeIndex, 2);
+  assert.equal(waiting.state.fleet.find((agv) => agv.id === "AGV-03")?.nodeId, "N07");
+  assert.equal(waiting.state.fleet.find((agv) => agv.id === "AGV-03")?.status, "waiting");
+
+  const replanned = beginMissionReplan(waiting.state, "M-001");
+  assert.equal(replanned.result.status, "route_updated");
+  if (replanned.result.status === "route_updated") {
+    assert.deepEqual(replanned.result.newRoute, ["N07", "N08", "N11", "RACK-A12"]);
+  }
+  assert.equal(replanned.state.metrics.industrialFaultSafeResponses, 1);
 });
 
 test("simulator stops AGV-03 at N07 and marks N07-N09 blocked", () => {
@@ -199,6 +271,10 @@ test("complete reset clears proposal, mission, blockage, metrics and traces", ()
   assert.equal(reset.telemetry.pendingTimerCount, 0);
   assert.equal(reset.telemetry.faultState, "none");
   assert.equal(reset.edges.some((edge) => edge.blocked), false);
+  assert.equal(reset.trafficReservations.length, 0);
+  assert.equal(reset.fleet.every((agv) => agv.heartbeatStatus === "online"), true);
+  assert.equal(reset.metrics.industrialFaultTests, 0);
+  assert.equal(reset.metrics.industrialFaultSafeResponses, 0);
 });
 
 test("Dijkstra still finds alternate route in the blocked live graph", () => {

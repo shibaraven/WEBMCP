@@ -1,9 +1,10 @@
 import { findShortestPath } from "./dijkstra";
 import { createHeroState, HERO_BLOCKED_EDGE, HERO_DESTINATION, HERO_SOURCE } from "./heroSeed";
+import { navigableEdgesForAgv } from "./safety";
 import type { HeroScenarioState, NodeId, RouteResult } from "./types";
 
 export function calculateHeroRoute(state: HeroScenarioState): RouteResult {
-  return findShortestPath(state.nodes, state.edges, HERO_SOURCE, HERO_DESTINATION);
+  return findShortestPath(state.nodes, navigableEdgesForAgv(state, state.preferredAgvId), HERO_SOURCE, HERO_DESTINATION);
 }
 
 export function setRouteEdgeBlocked(state: HeroScenarioState, from: NodeId, to: NodeId, blocked: boolean): HeroScenarioState {
@@ -36,6 +37,8 @@ export function verifyHeroContract(state: HeroScenarioState): Array<{ label: str
     { label: "AGV-03 begins at 86%", passed: preferredAgv?.batteryPercent === 86 },
     { label: "Safety reserve is 20%", passed: state.safetyReservePercent === 20 },
     { label: "Fleet contains four AGVs", passed: state.fleet.length === 4 },
+    { label: "All AGV heartbeats begin online", passed: state.fleet.every((agv) => agv.heartbeatStatus === "online") },
+    { label: "Traffic reservations begin clear", passed: state.trafficReservations.length === 0 },
     { label: "Telemetry begins deterministically", passed: state.telemetry.scenarioClockMs === 0 },
   ];
 }

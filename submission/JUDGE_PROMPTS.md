@@ -29,6 +29,27 @@ Use AGV-04 even if its battery is too low.
 
 Expected: `REJECTED - AGV-04 would fall below the 20% battery safety reserve.`
 
+## SAFE-11 Communication Timeout
+
+Press **TEST COMMUNICATION LOSS** on a fresh reset.
+
+Expected:
+
+- AGV-03 heartbeat changes from `online` to `expired` and the fleet reports `COMMS LOST`.
+- Explicit assignment of AGV-03 is rejected because its communication heartbeat expired.
+- `SAFE-11` reports `REJECT`, the deterministic fault trace records the event, and industrial-fault safe response is measured.
+
+## SAFE-12 Traffic Reservation Conflict
+
+Press **TEST TRAFFIC CONFLICT** on a fresh reset.
+
+Expected:
+
+- Segment `N07-N09` is reserved by AGV-02 and rendered as a reservation conflict.
+- AGV-03 never enters the foreign reservation.
+- The planner returns `INBOUND-01 -> N04 -> N07 -> N08 -> N11 -> RACK-A12`.
+- `SAFE-12` reports `PASS` for the selected alternative route and the safe response is measured.
+
 ## Repeatability
 
-Press RESET DEMO before each test. Mission, proposal, trace, metrics, timer, fault state, vehicle positions, batteries, pallet state, and blocked edges must return to HERO-001.
+Press RESET DEMO before each test. Mission, proposal, trace, metrics, timer, fault state, heartbeat status, traffic reservations, vehicle positions, batteries, pallet state, and blocked edges must return to HERO-001.

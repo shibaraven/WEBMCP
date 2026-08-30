@@ -15,6 +15,8 @@ import {
   inspectLocation,
   rejectTransportProposal,
   resumeReplannedMission,
+  runCommunicationTimeoutTest,
+  runTrafficConflictTest,
   runTransportPlan,
   startApprovedMission,
 } from "../domain/missionEngine";
@@ -258,7 +260,21 @@ export function useCommandCenter() {
     return result;
   }, [commit, executeCommand]);
 
-  const safetyProbe = useCallback((kind: "destination" | "battery") => {
+  const safetyProbe = useCallback((kind: "destination" | "battery" | "communication" | "traffic") => {
+    if (kind === "communication") {
+      const transition = runCommunicationTimeoutTest(stateRef.current);
+      commit(transition.state);
+      const reason = transition.result.status === "rejected" ? transition.result.reason : "SAFE-11 test did not reject the expired AGV.";
+      setOperatorNotice(`SAFE-11: ${reason}`);
+      return transition.result;
+    }
+    if (kind === "traffic") {
+      const transition = runTrafficConflictTest(stateRef.current);
+      commit(transition.state);
+      const route = transition.result.status === "plan_available" ? transition.result.plan.plannedRoute.join(" -> ") : transition.result.reason;
+      setOperatorNotice(`SAFE-12: foreign reservation avoided / ${route}`);
+      return transition.result;
+    }
     const input: PlanTransportInput = kind === "destination"
       ? { palletId: "P-104", destinationId: "RACK-Z99" }
       : { palletId: "P-104", destinationId: "RACK-A12", agvId: "AGV-04" };
@@ -267,7 +283,7 @@ export function useCommandCenter() {
       destinationId: input.destinationId,
       ...(input.agvId ? { agvId: input.agvId } : {}),
     }, { source: "manual" });
-  }, [executeCommand]);
+  }, [commit, executeCommand]);
 
   const reset = useCallback(() => {
     timerGenerationRef.current += 1;
@@ -276,7 +292,7 @@ export function useCommandCenter() {
     const fresh = createHeroState(`HERO-001-R${Date.now()}`);
     commit(fresh);
     setResetCount((count) => count + 1);
-    setOperatorNotice("HERO-001 reset: mission, proposal, trace, metrics, timers and fault state cleared.");
+    setOperatorNotice("HERO-001 reset: mission, proposal, trace, metrics, timers, heartbeat faults and traffic reservations cleared.");
   }, [commit]);
 
   const manualBenchmarkStep = useCallback(() => {

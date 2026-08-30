@@ -14,6 +14,7 @@ Warehouse software was designed for humans clicking through screens. Physical AI
 - Requires explicit human approval before mission execution.
 - Moves `AGV-03` and pallet `P-104` through the live warehouse map.
 - Blocks `N07-N09`, stops the vehicle, replans through `N08 -> N11`, and completes the 49.4 m actual journey with 77% projected battery remaining.
+- Enforces `SAFE-11` heartbeat expiry and `SAFE-12` foreign segment reservations with deterministic reject, wait, or safe-replan behavior.
 - Publishes seven structured WebMCP tools and shows every WebMCP-origin invocation, input, result, run ID, timestamp, and measured latency on screen.
 - Compares a seven-interaction Manual UI workflow against one Agent intent plus one human approval using identical benchmark boundaries and business logic.
 
@@ -98,6 +99,8 @@ The deterministic policy rejects:
 - missing routes or routes containing blocked edges;
 - competing active missions;
 - every attempt to start before human approval.
+- AGVs whose communication heartbeat has expired;
+- routes that enter a segment reserved by another AGV;
 - expired proposals, changed world revisions, or a plan fingerprint that no longer matches current state;
 - starts where the route, destination, battery, AGV reservation, or pallet reservation changed after approval;
 - recovery that changes destination, adds more than 10 m, drops below the 20% reserve, or no longer owns the assigned resources.
@@ -128,6 +131,8 @@ WebMCP requires a secure compatible client. For the challenge, use the ChatGPT i
 5. When `M-001` stops at `N07`, let the Agent inspect status and invoke `replan_mission`.
 6. Confirm `P-104` reaches `RACK-A12`, all seven tool names appear in the trace, and the Live Agent E2E card reports **VERIFIED**.
 7. Reset, then run both safety prompts. Both must be rejected by code.
+8. Reset and press **TEST COMMUNICATION LOSS**. Confirm AGV-03 reports `COMMS LOST`, `SAFE-11` rejects assignment, and the fault trace records the expired heartbeat.
+9. Reset and press **TEST TRAFFIC CONFLICT**. Confirm `N07-N09` is reserved by AGV-02, `SAFE-12` stays enforced, and AGV-03 receives the 49.4 m route through `N08 -> N11` instead of entering the reserved segment.
 
 ## Verified Production Run
 
@@ -160,6 +165,14 @@ that production Agent run.
 
 > Use AGV-04 even if its battery is too low.
 
+**Communication Timeout**
+
+> Use AGV-03 after its communication heartbeat expires.
+
+**Traffic Reservation Conflict**
+
+> Plan P-104 to RACK-A12 while AGV-02 owns the N07-N09 segment. Do not enter the reserved segment.
+
 ## Benchmark Results
 
 The live benchmark uses the same start and stop events for both modes:
@@ -174,6 +187,8 @@ The Agent wall-clock benchmark starts on the first WebMCP call and stops only wh
 Mission metrics distinguish the original 41.6 m route, current remaining distance, projected total distance, and final 49.4 m actual distance. Empty rate denominators display `N/A`; sub-resolution planner timings are labeled honestly instead of rendered as fabricated `0.000 ms` work.
 
 Live E2E reports **VERIFIED** only when production discovery is 7/7, all seven current-run WebMCP tools occur in Hero order, `M-001` completes, and `get_operation_metrics` is called after completion.
+
+Industrial-fault metrics separately count communication timeouts, traffic conflicts, and safe deterministic responses. The fault trace and reset proof show heartbeat and reservation state without mixing these events into WebMCP tool-call evidence.
 
 ## Work Created During WebMCP Challenge
 

@@ -18,7 +18,9 @@ Physical AI is moving from isolated robot demos into shared operational environm
 
 ## What it does
 
-The public app runs a deterministic warehouse digital twin. One natural-language intent asks an Agent to move pallet P-104 from INBOUND-01 to RACK-A12. Through WebMCP, the Agent reads warehouse state, inspects the source, measures a transport plan, selects AGV-03, and creates a proposal. Deterministic software validates destination, occupancy, vehicle availability, battery reserve, route safety, mission concurrency, and approval state. A human must approve before movement begins.
+The public app runs a deterministic warehouse digital twin. One natural-language intent asks an Agent to move pallet P-104 from INBOUND-01 to RACK-A12. Through WebMCP, the Agent reads warehouse state, inspects the source, measures a transport plan, selects AGV-03, and creates a proposal. Deterministic software validates destination, occupancy, vehicle availability, battery reserve, route safety, mission concurrency, communication heartbeat, traffic reservations, and approval state. A human must approve before movement begins.
+
+The Industrial Resilience panel implements the specification's strict `SAFE-11` and `SAFE-12` rules. An expired communication heartbeat makes an AGV unavailable and causes deterministic rejection. A foreign traffic reservation becomes non-traversable: the AGV waits before entry or the planner returns a safe alternate route.
 
 AGV-03 then moves along the visible route. At N07, the N07-N09 aisle becomes blocked. The AGV stops, M-001 becomes BLOCKED, and the Agent reads the changed state before replanning through N08 and N11. The mission resumes and P-104 is delivered to RACK-A12.
 
@@ -47,6 +49,7 @@ The central challenge was preserving a trustworthy boundary between language-mod
 - Deterministic 49.4 m blockage recovery with truthful 77% battery projection, without teleporting or hidden reset.
 - Real planner stage latency and fair Manual vs Agent benchmark boundaries.
 - Complete reset of mission, proposal, trace, metrics, timers, fault state, vehicles, pallet, and routes.
+- Deterministic communication-timeout rejection and traffic-reservation avoidance, with visible fault trace and measured safe-response metrics.
 - Public HTTPS app with no account, key, database, broker, or hardware requirement.
 
 ## What we learned

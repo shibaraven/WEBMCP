@@ -1,4 +1,4 @@
-import type { Agv, HeroScenarioState, RouteResult, SafetyCheck, SafetyResult } from "./types";
+import type { Agv, AgvId, HeroScenarioState, NodeId, RouteResult, SafetyCheck, SafetyResult, WarehouseEdge } from "./types";
 
 export interface SafetyContext {
   palletId: string;
@@ -13,15 +13,42 @@ function resultFromChecks(checks: SafetyCheck[]): SafetyResult {
   return { status: failure ? "rejected" : "safe", checks, reason: failure?.reason ?? null };
 }
 
+function edgeMatches(edge: Pick<WarehouseEdge, "from" | "to">, from: NodeId, to: NodeId): boolean {
+  return (edge.from === from && edge.to === to) || (edge.from === to && edge.to === from);
+}
+
 function routeContainsBlockedEdge(state: HeroScenarioState, route: RouteResult | null): boolean {
   if (!route?.found) return false;
   return route.path.some((nodeId, index) => {
     const next = route.path[index + 1];
     if (!next) return false;
     return state.edges.some((edge) => {
-      const matches = (edge.from === nodeId && edge.to === next) || (edge.from === next && edge.to === nodeId);
-      return matches && edge.blocked;
+      return edgeMatches(edge, nodeId, next) && edge.blocked;
     });
+  });
+}
+
+export function routeContainsForeignReservation(
+  state: HeroScenarioState,
+  route: RouteResult | null,
+  agvId: AgvId | null,
+): boolean {
+  if (!route?.found) return false;
+  return route.path.some((nodeId, index) => {
+    const next = route.path[index + 1];
+    if (!next) return false;
+    return state.trafficReservations.some((reservation) =>
+      reservation.reservedByAgvId !== agvId && edgeMatches(reservation, nodeId, next),
+    );
+  });
+}
+
+export function navigableEdgesForAgv(state: HeroScenarioState, agvId: AgvId | null): WarehouseEdge[] {
+  return state.edges.map((edge) => {
+    const reservedByAnother = state.trafficReservations.some((reservation) =>
+      reservation.edgeId === edge.id && reservation.reservedByAgvId !== agvId,
+    );
+    return reservedByAnother ? { ...edge, blocked: true } : edge;
   });
 }
 
@@ -31,9 +58,11 @@ export function validateTransportPlan(state: HeroScenarioState, context: SafetyC
   const palletTransportable = palletExists && state.pallet.status === "waiting";
   const destinationOccupied = Boolean(destination && state.pallet.nodeId === destination.id && state.pallet.status === "stored");
   const agvAvailable = Boolean(context.agv && context.agv.status === "idle" && context.agv.currentTaskId === null);
+  const heartbeatHealthy = context.agv?.heartbeatStatus === "online";
   const batterySafe = context.estimatedBatteryAfter !== null && context.estimatedBatteryAfter >= state.safetyReservePercent;
   const routeAvailable = Boolean(context.route?.found);
   const routeClear = routeAvailable && !routeContainsBlockedEdge(state, context.route);
+  const reservationClear = !routeAvailable || !routeContainsForeignReservation(state, context.route, context.agv?.id ?? null);
   const activeMission = Boolean(state.mission && !["completed", "failed"].includes(state.mission.status));
 
   return resultFromChecks([
@@ -43,9 +72,10 @@ export function validateTransportPlan(state: HeroScenarioState, context: SafetyC
     { id: "SAFE-04", label: "Destination is available", passed: !destinationOccupied, reason: `Destination ${context.destinationId} is already occupied.` },
     { id: "SAFE-05", label: "Selected AGV is available", passed: agvAvailable, reason: `${context.agv?.id ?? "Selected AGV"} is not available.` },
     { id: "SAFE-06", label: "Battery reserve remains above 20%", passed: batterySafe, reason: `${context.agv?.id ?? "Selected AGV"} would fall below the 20% battery safety reserve.` },
-    { id: "SAFE-07", label: "Route exists", passed: routeAvailable, reason: `No route is available to ${context.destinationId}.` },
-    { id: "SAFE-08", label: "Route excludes blocked edges", passed: routeClear, reason: "The proposed route contains a blocked edge." },
-    { id: "SAFE-09", label: "AGV has no competing mission", passed: !activeMission, reason: "An active mission already owns the transport resource." },
+    { id: "SAFE-07", label: "Route exists and excludes blocked edges", passed: routeClear, reason: routeAvailable ? "The proposed route contains a blocked edge." : `No route is available to ${context.destinationId}.` },
+    { id: "SAFE-08", label: "AGV has no competing mission", passed: !activeMission, reason: "An active mission already owns the transport resource." },
+    { id: "SAFE-11", label: "AGV heartbeat is online", passed: heartbeatHealthy, reason: `${context.agv?.id ?? "Selected AGV"} is unavailable because its communication heartbeat expired.` },
+    { id: "SAFE-12", label: "Route excludes foreign reservations", passed: reservationClear, reason: "The proposed route enters a segment reserved by another AGV." },
   ]);
 }
 
@@ -59,16 +89,20 @@ export function validateMissionStart(state: HeroScenarioState): SafetyResult {
     distanceMeters: mission.remainingDistanceMeters,
     visitedNodeCount: mission.route.length,
   } : null;
+  const heartbeatHealthy = selectedAgv?.heartbeatStatus === "online";
+  const reservationClear = !route?.found || !routeContainsForeignReservation(state, route, mission?.agvId ?? null);
   return resultFromChecks([
     { id: "START-01", label: "Mission exists", passed: Boolean(mission), reason: "No mission exists." },
-    { id: "START-02", label: "Proposal was approved", passed: state.proposal?.status === "approved", reason: "Mission may not start before human approval." },
+    { id: "SAFE-09", label: "Proposal was approved", passed: state.proposal?.status === "approved", reason: "Mission may not start before human approval." },
     { id: "START-03", label: "Mission is approved", passed: mission?.status === "approved", reason: "Mission is not in the approved state." },
     { id: "START-04", label: "Proposal is safe", passed: state.proposal?.safety.status === "safe", reason: "Rejected proposal cannot start a mission." },
     { id: "START-05", label: "Approved world is unchanged", passed: mission?.approvedWorldRevision === state.worldRevision, reason: "Warehouse state changed after approval; a fresh proposal is required." },
     { id: "START-06", label: "Destination still exists", passed: destinationExists, reason: "Approved destination no longer exists." },
-    { id: "START-07", label: "Approved route remains clear", passed: Boolean(route?.found) && !routeContainsBlockedEdge(state, route), reason: "Approved route is no longer clear." },
+    { id: "SAFE-10", label: "Approved active route remains valid", passed: Boolean(route?.found) && !routeContainsBlockedEdge(state, route), reason: "Approved route is no longer clear." },
     { id: "START-08", label: "AGV reservation is owned", passed: selectedAgv?.status === "waiting" && selectedAgv.currentTaskId === mission?.id, reason: "Approved AGV reservation is no longer owned by this mission." },
     { id: "START-09", label: "Pallet reservation is owned", passed: state.pallet.status === "reserved" && state.pallet.id === mission?.palletId, reason: "Pallet reservation is no longer valid." },
     { id: "START-10", label: "Battery reserve is valid", passed: (mission?.projectedBatteryAfter ?? -1) >= state.safetyReservePercent, reason: "Projected battery is below the safety reserve." },
+    { id: "SAFE-11", label: "AGV heartbeat remains online", passed: heartbeatHealthy, reason: `${selectedAgv?.id ?? "Selected AGV"} is unavailable because its communication heartbeat expired.` },
+    { id: "SAFE-12", label: "Approved route has no foreign reservation", passed: reservationClear, reason: "Approved route enters a segment reserved by another AGV." },
   ]);
 }

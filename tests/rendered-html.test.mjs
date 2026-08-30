@@ -25,6 +25,11 @@ test("server-renders the complete HERO-001 command center", async () => {
   assert.match(html, /WebMCP trace/);
   assert.match(html, /Human vs Agent - live benchmark/);
   assert.match(html, /Measured operation metrics/);
+  assert.match(html, /Industrial resilience/);
+  assert.match(html, /SAFE-11 \/ COMMUNICATION/);
+  assert.match(html, /SAFE-12 \/ TRAFFIC RESERVATION/);
+  assert.match(html, /Test communication loss/);
+  assert.match(html, /Test traffic conflict/);
   assert.match(html, /Live Agent E2E proof/);
   assert.match(html, /COMPLETE RESET SCOPE/);
   assert.match(html, /P-104/);

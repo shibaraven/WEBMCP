@@ -11,6 +11,7 @@ export type NodeId =
 
 export type AgvId = `AGV-0${1 | 2 | 3 | 4}`;
 export type AgvStatus = "idle" | "moving" | "waiting" | "blocked" | "charging" | "maintenance";
+export type HeartbeatStatus = "online" | "expired";
 export type MissionStatus = "approved" | "running" | "blocked" | "replanning" | "completed" | "failed";
 export type DecisionStage = "OBSERVE" | "PLAN" | "VALIDATE" | "APPROVE" | "EXECUTE" | "RECOVER";
 export type StageStatus = "idle" | "active" | "complete" | "warning";
@@ -40,6 +41,14 @@ export interface Agv {
   capacityKg: number;
   speedMps: number;
   currentTaskId: string | null;
+  heartbeatStatus: HeartbeatStatus;
+}
+
+export interface TrafficReservation {
+  edgeId: string;
+  from: NodeId;
+  to: NodeId;
+  reservedByAgvId: AgvId;
 }
 
 export interface Pallet {
@@ -162,6 +171,10 @@ export interface OperationMetrics {
   unsafeRequests: number;
   unsafeRejections: number;
   transportAttempts: number;
+  industrialFaultTests: number;
+  industrialFaultSafeResponses: number;
+  communicationTimeouts: number;
+  trafficConflicts: number;
 }
 
 export type BenchmarkStatus = "idle" | "running" | "completed";
@@ -204,6 +217,7 @@ export interface HeroScenarioState {
   nodes: WarehouseNode[];
   edges: WarehouseEdge[];
   fleet: Agv[];
+  trafficReservations: TrafficReservation[];
   pallet: Pallet;
   proposal: TransportProposal | null;
   mission: Mission | null;
@@ -219,7 +233,7 @@ export interface HeroScenarioState {
     distanceTravelledMeters: number;
     replans: number;
     pendingTimerCount: number;
-    faultState: "none" | "aisle_blockage";
+    faultState: "none" | "aisle_blockage" | "communication_loss" | "traffic_conflict";
     trace: string[];
   };
 }
