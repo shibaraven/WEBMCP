@@ -1,4 +1,8 @@
-# Demo Video Script - Target 2:38
+# Verified Demo Video Script - 2:38
+
+The final cut uses the real Chrome 149+ compatible-Agent run. The closing evidence
+shows production discovery 7/7, actual tool coverage 7/7, ordered Hero flow PASS,
+Hero outcome COMPLETED, metrics-after-complete PASS, and the VERIFIED badge.
 
 ## 0:00-0:14 - Problem
 

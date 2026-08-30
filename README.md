@@ -129,6 +129,19 @@ WebMCP requires a secure compatible client. For the challenge, use the ChatGPT i
 6. Confirm `P-104` reaches `RACK-A12`, all seven tool names appear in the trace, and the Live Agent E2E card reports **VERIFIED**.
 7. Reset, then run both safety prompts. Both must be rejected by code.
 
+## Verified Production Run
+
+On August 30, 2026, the Hero Prompt completed in Chrome 149+ through a compatible
+ChatGPT Work Agent against the public HTTPS deployment. The page reported 7/7
+production tools registered, 7/7 distinct tools invoked in the required order,
+Hero outcome `COMPLETED`, metrics-after-complete `PASS`, and Live Agent E2E
+`VERIFIED`. The run used one human approval, recovered once from the N07 blockage,
+finished on the 49.4 m alternate route, and left AGV-03 at 77% battery.
+
+The [2:37 verified demo video](submission/physical-ai-webmcp-demo.mp4) uses English
+narration and hard-burned English subtitles. Its final evidence frames come from
+that production Agent run.
+
 ## Suggested Prompts
 
 **Main Hero Prompt**
