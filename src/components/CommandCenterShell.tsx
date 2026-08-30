@@ -19,8 +19,8 @@ function MapEdge({ edge, nodes, active }: { edge: WarehouseEdge; nodes: readonly
   const to = nodes.find((node) => node.id === edge.to)!;
   const dx = to.x - from.x;
   const dy = to.y - from.y;
-  const width = Math.sqrt(dx * dx + dy * dy);
-  const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+  const width = Math.sqrt(dx * dx + dy * dy).toFixed(3);
+  const angle = (Math.atan2(dy, dx) * (180 / Math.PI)).toFixed(3);
   return (
     <span
       aria-hidden="true"
