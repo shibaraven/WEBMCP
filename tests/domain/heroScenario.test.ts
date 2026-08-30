@@ -70,7 +70,7 @@ test("Dijkstra rejects negative edge weights", () => {
 
 test("Reset recovers the pristine seed after arbitrary mutation", () => {
   const changed = blockHeroEdge(createHeroState());
-  changed.pallet.status = "delivered";
+  changed.pallet.status = "stored";
   changed.fleet[2].batteryPercent = 3;
   changed.telemetry.trace.push("operator-event");
   const reset = resetHeroScenario();

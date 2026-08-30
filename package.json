@@ -9,9 +9,10 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run test:domain && npm run build && npm run test:render",
+    "test": "npm run typecheck && npm run test:domain && npm run build && npm run test:render",
     "test:domain": "tsx --test tests/domain/*.test.ts",
     "test:render": "node --test tests/rendered-html.test.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.check.json",
     "lint": "eslint app src tests vite.config.ts --ignore-pattern dist --ignore-pattern .vinext",
     "db:generate": "drizzle-kit generate"
   },
